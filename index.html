@@ -90,13 +90,31 @@
     </div>
   </div>
 
+    <!-- Modal de ajustes (API key) -->
+  <div id="settingsModal" class="modal" hidden>
+    <div class="modal-content">
+      <h2>Ajustes</h2>
+      <label>API Key de OCR.space
+        <input id="inputApiKey" type="text" placeholder="K1234567890..." autocomplete="off" />
+      </label>
+      <p class="crop-hint">
+        Obtén tu clave gratuita en
+        <a href="https://ocr.space/ocrapi/freekey" target="_blank" rel="noopener" style="color: var(--accent);">ocr.space/ocrapi/freekey</a>
+      </p>
+      <p class="crop-hint">Se guarda solo en tu teléfono, no se sube a GitHub.</p>
+      <div class="modal-actions">
+        <button id="btnCancelSettings" class="secondary">Cancelar</button>
+        <button id="btnSaveSettings" class="primary">Guardar</button>
+      </div>
+    </div>
+  </div>
+
   <div id="loader" class="loader" hidden>
     <div class="spinner"></div>
     <p id="loaderText">Procesando…</p>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/cropperjs@1.6.1/dist/cropper.min.js"></script>
   <script src="app.js"></script>
 </body>

@@ -1,6 +1,6 @@
 // ============================================
-//  Enrutador PWA — Lógica principal (v10)
-//  Preprocesamiento mínimo + doble OCR (crudo y gris)
+//  Enrutador PWA — Lógica principal (v11)
+//  OCR.space (en lugar de Tesseract)
 // ============================================
 
 if ('serviceWorker' in navigator) {
@@ -14,8 +14,10 @@ let ocrResultText = '';
 let cropperInstance = null;
 let rotacionActual = 0;
 
+// ---------- DOM ----------
 const btnCapture   = document.getElementById('btnCapture');
 const btnOptimize  = document.getElementById('btnOptimize');
+const btnSettings  = document.getElementById('btnSettings');
 const cameraInput  = document.getElementById('cameraInput');
 const packagesList = document.getElementById('packagesList');
 
@@ -36,6 +38,11 @@ const ocrText         = document.getElementById('ocrText');
 const btnCancelAddress = document.getElementById('btnCancelAddress');
 const btnSaveAddress   = document.getElementById('btnSaveAddress');
 
+const settingsModal      = document.getElementById('settingsModal');
+const inputApiKey        = document.getElementById('inputApiKey');
+const btnCancelSettings  = document.getElementById('btnCancelSettings');
+const btnSaveSettings    = document.getElementById('btnSaveSettings');
+
 const loader     = document.getElementById('loader');
 const loaderText = document.getElementById('loaderText');
 
@@ -43,38 +50,63 @@ function showLoader(msg) { loaderText.textContent = msg || 'Procesando…'; load
 function hideLoader() { loader.hidden = true; }
 function savePackages() { localStorage.setItem('packages', JSON.stringify(packages)); }
 
-// ---------- Preprocesamiento MÍNIMO ----------
-// Solo escala 1.5x + grises suave. Sin binarizar, sin nitidez.
-function preprocesarCanvas(canvasOriginal) {
-  const escala = 1.5;
-  const w = Math.round(canvasOriginal.width * escala);
-  const h = Math.round(canvasOriginal.height * escala);
+// ---------- API key ----------
+function getApiKey() {
+  return localStorage.getItem('ocrspace_key') || '';
+}
+function setApiKey(key) {
+  localStorage.setItem('ocrspace_key', key.trim());
+}
 
+// ---------- Reducir imagen a <1MB (requisito de OCR.space gratis) ----------
+async function canvasABlobLigero(canvas) {
+  let calidad = 0.85;
+  let blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', calidad));
+  while (blob && blob.size > 950000 && calidad > 0.3) {
+    calidad -= 0.1;
+    blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', calidad));
+  }
+  return blob;
+}
+
+// ---------- Llamada a OCR.space ----------
+async function ocrSpaceReconocer(canvas, apiKey) {
+  const blob = await canvasABlobLigero(canvas);
+
+  const formData = new FormData();
+  formData.append('apikey', apiKey);
+  formData.append('language', 'spa');
+  formData.append('isOverlayRequired', 'false');
+  formData.append('OCREngine', '2');            // motor 2 = mejor para texto pequeño
+  formData.append('scale', 'true');             // reescala internamente
+  formData.append('detectOrientation', 'true');
+  formData.append('file', blob, 'etiqueta.jpg');
+
+  const resp = await fetch('https://api.ocr.space/parse/image', {
+    method: 'POST',
+    body: formData
+  });
+  const data = await resp.json();
+
+  if (data.IsErroredOnProcessing) {
+    throw new Error((data.ErrorMessage && data.ErrorMessage[0]) || 'Error en OCR.space');
+  }
+  if (!data.ParsedResults || !data.ParsedResults.length) {
+    throw new Error('OCR.space no devolvió texto.');
+  }
+  return data.ParsedResults[0].ParsedText || '';
+}
+
+// ---------- Preprocesamiento visual (solo para mostrar al usuario) ----------
+// La imagen que mandamos a OCR.space es el canvas recortado tal cual (sin filtros),
+// porque el motor de OCR.space funciona mejor con fotos naturales.
+function prepararVistaPrevia(canvasOriginal) {
+  const w = canvasOriginal.width;
+  const h = canvasOriginal.height;
   const canvas = document.createElement('canvas');
   canvas.width = w; canvas.height = h;
   const ctx = canvas.getContext('2d');
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(canvasOriginal, 0, 0, w, h);
-
-  const imageData = ctx.getImageData(0, 0, w, h);
-  const data = imageData.data;
-
-  // Grises con contraste suave
-  let min = 255, max = 0;
-  const gray = new Uint8ClampedArray(w * h);
-  for (let i = 0, j = 0; i < data.length; i += 4, j++) {
-    const g = Math.round(0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2]);
-    gray[j] = g;
-    if (g < min) min = g;
-    if (g > max) max = g;
-  }
-  const range = (max - min) || 1;
-  for (let j = 0, k = 0; j < gray.length; j++, k += 4) {
-    const v = ((gray[j] - min) / range) * 255;
-    data[k] = v; data[k+1] = v; data[k+2] = v; data[k+3] = 255;
-  }
-  ctx.putImageData(imageData, 0, 0);
+  ctx.drawImage(canvasOriginal, 0, 0);
   return canvas;
 }
 
@@ -110,7 +142,13 @@ function renderPackages() {
 }
 
 // ---------- Captura ----------
-btnCapture.addEventListener('click', () => cameraInput.click());
+btnCapture.addEventListener('click', () => {
+  if (!getApiKey()) {
+    alert('Primero configura tu API key de OCR.space en Ajustes ⚙️');
+    return;
+  }
+  cameraInput.click();
+});
 
 cameraInput.addEventListener('change', (e) => {
   if (!e.target.files || e.target.files.length === 0) return;
@@ -134,6 +172,7 @@ cameraInput.addEventListener('change', (e) => {
   reader.readAsDataURL(file);
 });
 
+// ---------- Controles del recorte ----------
 btnRotate.addEventListener('click', () => {
   if (!cropperInstance) return;
   rotacionActual = (rotacionActual + 90) % 360;
@@ -150,19 +189,19 @@ btnCancelCrop.addEventListener('click', () => {
   rotacionActual = 0;
 });
 
-// ---------- OCR ----------
+// ---------- Confirmar recorte → OCR.space ----------
 btnConfirmCrop.addEventListener('click', async () => {
   if (!cropperInstance) return;
 
-  // Recorte en resolución moderada (sin exagerar; a veces MENOS es MÁS)
   const canvasRecortado = cropperInstance.getCroppedCanvas({
-    maxWidth: 1400, maxHeight: 1400,
+    maxWidth: 2000, maxHeight: 2000,
     imageSmoothingEnabled: true, imageSmoothingQuality: 'high'
   });
   if (!canvasRecortado) { alert('No se pudo recortar la imagen.'); return; }
 
-  const canvasGris = preprocesarCanvas(canvasRecortado);
-  labelPreview.src = canvasGris.toDataURL('image/jpeg', 0.9);
+  // Vista previa: el recorte tal cual se manda a OCR.space
+  const canvasVista = prepararVistaPrevia(canvasRecortado);
+  labelPreview.src = canvasVista.toDataURL('image/jpeg', 0.9);
 
   cropperInstance.destroy();
   cropperInstance = null;
@@ -174,69 +213,21 @@ btnConfirmCrop.addEventListener('click', async () => {
   ocrText.textContent = '';
   addressModal.hidden = false;
 
-  showLoader('Iniciando OCR…');
-  let cancelado = false;
-  const timeoutId = setTimeout(() => {
-    cancelado = true; hideLoader();
-    alert('El OCR tardó demasiado.');
-  }, 150000);
+  showLoader('Enviando a OCR.space…');
 
   try {
-    const blobCrudo = await new Promise(res => canvasRecortado.toBlob(res, 'image/png'));
-    const blobGris  = await new Promise(res => canvasGris.toBlob(res, 'image/png'));
+    const texto = await ocrSpaceReconocer(canvasRecortado, getApiKey());
+    ocrResultText = texto;
+    ocrText.textContent = texto;
 
-    // ---- Pasada 1: imagen ORIGINAL (sin procesar) ----
-    loaderText.textContent = 'Lectura 1/2 (original)…';
-    const r1 = await Tesseract.recognize(blobCrudo, 'spa', {
-      tessedit_pageseg_mode: '4',
-      logger: m => {
-        if (cancelado) return;
-        if (m.status === 'recognizing text') loaderText.textContent = `Lectura 1/2… ${Math.round(m.progress * 100)}%`;
-        else if (m.status === 'loading language traineddata') loaderText.textContent = 'Descargando idioma…';
-      }
-    });
-    if (cancelado) return;
-
-    // ---- Pasada 2: imagen en grises ----
-    loaderText.textContent = 'Lectura 2/2 (grises)…';
-    const r2 = await Tesseract.recognize(blobGris, 'spa', {
-      tessedit_pageseg_mode: '4',
-      logger: m => {
-        if (cancelado) return;
-        if (m.status === 'recognizing text') loaderText.textContent = `Lectura 2/2… ${Math.round(m.progress * 100)}%`;
-      }
-    });
-    if (cancelado) return;
-
-    clearTimeout(timeoutId);
-
-    const t1 = (r1.data.text || '').trim();
-    const t2 = (r2.data.text || '').trim();
-
-    // Score: contar palabras "españolas válidas" + presencia de CP + números de calle
-    const score = (t) => {
-      const palabras = (t.match(/\b[A-Za-zÁÉÍÓÚÑáéíóúñ]{4,}\b/g) || []).length;
-      const cp = /\b\d{5}\b/.test(t) ? 10 : 0;
-      const numCalle = /\b\d{2,4}\b/.test(t) ? 3 : 0;
-      return palabras + cp + numCalle;
-    };
-    const s1 = score(t1), s2 = score(t2);
-
-    // Elegir el mejor, o unir si son complementarios
-    ocrResultText = s1 >= s2 ? t1 : t2;
-
-    ocrText.textContent = `--- Original (${s1}) ---\n${t1}\n\n--- Grises (${s2}) ---\n${t2}\n\n>>> ELEGIDA: ${s1 >= s2 ? 'Original' : 'Grises'}`;
-
-    inputAddress.value   = detectarDireccion(ocrResultText);
-    inputRecipient.value = detectarNombre(ocrResultText);
+    inputAddress.value   = detectarDireccion(texto);
+    inputRecipient.value = detectarNombre(texto);
 
   } catch (err) {
-    clearTimeout(timeoutId);
     console.error('Error OCR:', err);
-    ocrText.textContent = 'Error al leer la etiqueta: ' + err.message;
+    ocrText.textContent = 'Error: ' + err.message;
     alert('Error de OCR: ' + err.message);
   } finally {
-    clearTimeout(timeoutId);
     hideLoader();
     cameraInput.value = '';
   }
@@ -244,11 +235,7 @@ btnConfirmCrop.addEventListener('click', async () => {
 
 // ---------- Heurísticas ----------
 function detectarDireccion(texto) {
-  let t = texto
-    .replace(/[“”«»]/g, '"')
-    .replace(/[^\S\n]+/g, ' ')
-    .replace(/[|]/g, 'I');
-
+  let t = texto.replace(/[“”«»]/g, '"').replace(/[|]/g, 'I');
   const lineas = t.split('\n').map(l => l.trim()).filter(l => l.length > 2);
   if (lineas.length === 0) return '';
   const textoCompleto = lineas.join(' ');
@@ -280,7 +267,23 @@ function detectarNombre(texto) {
   return '';
 }
 
-// ---------- Guardar ----------
+// ---------- Ajustes (API key) ----------
+btnSettings.addEventListener('click', () => {
+  inputApiKey.value = getApiKey();
+  settingsModal.hidden = false;
+});
+
+btnCancelSettings.addEventListener('click', () => { settingsModal.hidden = true; });
+
+btnSaveSettings.addEventListener('click', () => {
+  const key = inputApiKey.value.trim();
+  if (!key) { alert('Ingresa una key válida.'); return; }
+  setApiKey(key);
+  settingsModal.hidden = true;
+  alert('Key guardada correctamente.');
+});
+
+// ---------- Guardar paquete ----------
 btnCancelAddress.addEventListener('click', () => { addressModal.hidden = true; });
 btnSaveAddress.addEventListener('click', () => {
   const recipient = inputRecipient.value.trim();
