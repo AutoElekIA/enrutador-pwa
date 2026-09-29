@@ -23,6 +23,17 @@
     </section>
     <section id="viewMap" class="view" hidden>
       <div id="map"></div>
+      <div id="navPanel" class="nav-panel" hidden>
+        <div class="nav-instruction" id="navInstruction">—</div>
+        <div class="nav-meta">
+          <span id="navDistance">—</span>
+          <span id="navEta">—</span>
+        </div>
+        <div class="nav-actions">
+          <button id="btnRepeat" class="secondary">🔊 Repetir</button>
+          <button id="btnNext" class="primary">✓ Llegué / Siguiente</button>
+        </div>
+      </div>
     </section>
   </main>
 
@@ -32,6 +43,32 @@
   </footer>
 
   <input type="file" id="cameraInput" accept="image/*" capture="environment" hidden />
+
+  <div id="addressModal" class="modal" hidden>
+    <div class="modal-content">
+      <h2>Confirma la dirección</h2>
+      <img id="labelPreview" alt="Vista previa etiqueta" />
+      <label>Destinatario
+        <input id="inputRecipient" type="text" placeholder="Nombre" />
+      </label>
+      <label>Dirección
+        <textarea id="inputAddress" rows="3" placeholder="Calle, número, colonia, CP, ciudad"></textarea>
+      </label>
+      <details>
+        <summary>Texto OCR completo</summary>
+        <pre id="ocrText"></pre>
+      </details>
+      <div class="modal-actions">
+        <button id="btnCancelAddress" class="secondary">Cancelar</button>
+        <button id="btnSaveAddress" class="primary">Guardar</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="loader" class="loader" hidden>
+    <div class="spinner"></div>
+    <p id="loaderText">Procesando…</p>
+  </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
