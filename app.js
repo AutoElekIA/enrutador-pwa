@@ -334,33 +334,134 @@ btnSaveAddress.addEventListener('click', () => {
 });
 
 // ---------- Optimizar ruta ----------
+// ---------- Geocodificación robusta ----------
+function limpiarParaGeocodificar(direccion) {
+  let d = direccion
+    .replace(/\s*,\s*/g, ', ')
+    .replace(/,\s*CP\s*\d{5}/gi, '')        // quita "CP 52161"
+    .replace(/\bCP\s*\d{5}\b/gi, '')         // quita "CP52161"
+    .replace(/\bMetepec\s*,?\s*Metepec\b/gi, 'Metepec')  // quita duplicados
+    .replace(/\s{2,}/g, ' ')
+    .replace(/,\s*,/g, ',')
+    .replace(/,\s*$/, '')
+    .trim();
+  return d;
+}
+
+function extraerCP(direccion) {
+  const m = direccion.match(/\b(\d{5})\b/);
+  return m ? m[1] : '';
+}
+
+function extraerCiudad(direccion) {
+  const ciudades = ['Metepec', 'Toluca', 'Zinacantepec', 'San Mateo Atenco',
+                    'Lerma', 'Calimaya', 'Mexicaltzingo', 'Chapultepec'];
+  for (const c of ciudades) {
+    if (new RegExp(`\\b${c}\\b`, 'i').test(direccion)) return c;
+  }
+  return '';
+}
+
+async function geocodificarConNominatim(consulta) {
+  const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=mx&q=${encodeURIComponent(consulta)}`;
+  const r = await fetch(url, { headers: { 'Accept-Language': 'es' } });
+  const data = await r.json();
+  if (data && data[0]) {
+    return {
+      lat: parseFloat(data[0].lat),
+      lon: parseFloat(data[0].lon),
+      display: data[0].display_name,
+      query: consulta
+    };
+  }
+  return null;
+}
+
+async function geocodificarDireccion(direccion) {
+  const limpia = limpiarParaGeocodificar(direccion);
+  const cp = extraerCP(direccion);
+  const ciudad = extraerCiudad(direccion);
+
+  // Variantes en cascada (de más específica a menos)
+  const variantes = [
+    `${limpia}, Estado de México, México`,                    // 1. Dirección completa
+    `${limpia}, México`,                                       // 2. Dirección completa sin estado
+    cp ? `${cp}, ${ciudad || 'Metepec'}, Estado de México, México` : null, // 3. Solo CP
+    ciudad ? `${ciudad}, Estado de México, México` : null,     // 4. Solo ciudad
+    'Metepec, Estado de México, México'                        // 5. Fallback: centro de Metepec
+  ].filter(Boolean);
+
+  for (let i = 0; i < variantes.length; i++) {
+    try {
+      const resultado = await geocodificarConNominatim(variantes[i]);
+      if (resultado) {
+        console.log(`✅ Geocodificado con variante ${i + 1}:`, variantes[i]);
+        console.log(`   → ${resultado.display}`);
+        return resultado;
+      }
+    } catch (err) {
+      console.warn(`Error con variante ${i + 1}:`, err);
+    }
+    // Respetar el rate limit de Nominatim (1 req/seg)
+    await new Promise(res => setTimeout(res, 1200));
+  }
+  return null;
+}
+
+// ---------- Optimizar ruta ----------
 btnOptimize.addEventListener('click', async () => {
   if (packages.length === 0) return;
   showLoader('Geocodificando direcciones…');
   try {
-    for (const p of packages) {
+    for (let i = 0; i < packages.length; i++) {
+      const p = packages[i];
       if (p.coords) continue;
-      const url = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' +
-                  encodeURIComponent(p.address);
-      const r = await fetch(url, { headers: { 'Accept-Language': 'es' } });
-      const data = await r.json();
-      if (data && data[0]) p.coords = { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
-      await new Promise(res => setTimeout(res, 1100));
+      loaderText.textContent = `Geocodificando ${i + 1}/${packages.length}…`;
+
+      const resultado = await geocodificarDireccion(p.address);
+      if (resultado) {
+        p.coords = { lat: resultado.lat, lon: resultado.lon };
+        p.geocodedAs = resultado.display;   // guardar cómo lo encontró, útil para depurar
+      }
     }
+
     const validos = packages.filter(p => p.coords);
-    if (validos.length === 0) { hideLoader(); alert('No se pudo geocodificar ninguna dirección.'); return; }
+    const fallidos = packages.filter(p => !p.coords);
+
+    if (validos.length === 0) {
+      hideLoader();
+      alert('No se pudo geocodificar ninguna dirección. Revisa que la dirección tenga calle, número y ciudad.');
+      return;
+    }
+
+    if (fallidos.length > 0) {
+      console.warn('Direcciones no geocodificadas:', fallidos.map(f => f.address));
+    }
+
     const continuar = (origen) => {
       ordenarPorVecinoMasCercano(origen, validos);
-      savePackages(); renderPackages(); hideLoader();
-      alert('Ruta optimizada. Lista para navegar.');
+      savePackages();
+      renderPackages();
+      hideLoader();
+      if (fallidos.length > 0) {
+        alert(`Ruta optimizada con ${validos.length} parada(s).\n\n⚠️ ${fallidos.length} dirección(es) no se pudieron ubicar y se omitieron del recorrido.`);
+      } else {
+        alert(`Ruta optimizada con ${validos.length} parada(s). Lista para navegar.`);
+      }
     };
+
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         pos => continuar({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
         () => continuar(validos[0].coords)
       );
-    } else continuar(validos[0].coords);
-  } catch (err) { hideLoader(); alert('Error al optimizar: ' + err.message); }
+    } else {
+      continuar(validos[0].coords);
+    }
+  } catch (err) {
+    hideLoader();
+    alert('Error al optimizar: ' + err.message);
+  }
 });
 
 function ordenarPorVecinoMasCercano(inicio, lista) {
