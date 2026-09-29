@@ -1,6 +1,6 @@
 // ============================================
-//  Enrutador PWA — Lógica principal (v11)
-//  OCR.space (en lugar de Tesseract)
+//  Enrutador PWA — Lógica principal (v12)
+//  OCR.space + correcciones OCR + mejor detección de destinatario
 // ============================================
 
 if ('serviceWorker' in navigator) {
@@ -51,12 +51,8 @@ function hideLoader() { loader.hidden = true; }
 function savePackages() { localStorage.setItem('packages', JSON.stringify(packages)); }
 
 // ---------- API key ----------
-function getApiKey() {
-  return localStorage.getItem('ocrspace_key') || '';
-}
-function setApiKey(key) {
-  localStorage.setItem('ocrspace_key', key.trim());
-}
+function getApiKey() { return localStorage.getItem('ocrspace_key') || ''; }
+function setApiKey(key) { localStorage.setItem('ocrspace_key', key.trim()); }
 
 // ---------- Reducir imagen a <1MB (requisito de OCR.space gratis) ----------
 async function canvasABlobLigero(canvas) {
@@ -98,8 +94,6 @@ async function ocrSpaceReconocer(canvas, apiKey) {
 }
 
 // ---------- Preprocesamiento visual (solo para mostrar al usuario) ----------
-// La imagen que mandamos a OCR.space es el canvas recortado tal cual (sin filtros),
-// porque el motor de OCR.space funciona mejor con fotos naturales.
 function prepararVistaPrevia(canvasOriginal) {
   const w = canvasOriginal.width;
   const h = canvasOriginal.height;
@@ -199,7 +193,6 @@ btnConfirmCrop.addEventListener('click', async () => {
   });
   if (!canvasRecortado) { alert('No se pudo recortar la imagen.'); return; }
 
-  // Vista previa: el recorte tal cual se manda a OCR.space
   const canvasVista = prepararVistaPrevia(canvasRecortado);
   labelPreview.src = canvasVista.toDataURL('image/jpeg', 0.9);
 
@@ -233,9 +226,31 @@ btnConfirmCrop.addEventListener('click', async () => {
   }
 });
 
+// ---------- Correcciones de errores típicos de OCR ----------
+const CORRECCIONES_OCR = [
+  // METEPECCP → METEPEC, CP
+  [/\bMETEPECCP\b/gi, 'METEPEC, CP'],
+  [/\b([A-ZÁÉÍÓÚÑ]{4,})CP\s*(\d{5})/g, '$1, CP $2'],
+  // CP sin espacio después
+  [/\bCP(\d{5})/gi, 'CP $1'],
+  // Ciudades pegadas al CP
+  [/\bMETEPEC\s*(\d{5})/gi, 'METEPEC, CP $1'],
+  // SAN MIGUEL / SANTA MARIA bien formateados
+  [/\bSANTA\s+MARIA\b/gi, 'Santa María'],
+  [/\bSAN\s+MIGUEL\b/gi, 'San Miguel'],
+  // Múltiples espacios colapsados
+  [/\s{2,}/g, ' '],
+];
+
+function aplicarCorrecciones(texto) {
+  let t = texto;
+  for (const [re, sub] of CORRECCIONES_OCR) t = t.replace(re, sub);
+  return t;
+}
+
 // ---------- Heurísticas ----------
 function detectarDireccion(texto) {
-  let t = texto.replace(/[“”«»]/g, '"').replace(/[|]/g, 'I');
+  let t = aplicarCorrecciones(texto).replace(/[“”«»]/g, '"').replace(/[|]/g, 'I');
   const lineas = t.split('\n').map(l => l.trim()).filter(l => l.length > 2);
   if (lineas.length === 0) return '';
   const textoCompleto = lineas.join(' ');
@@ -260,9 +275,29 @@ function limpiarDireccion(s) {
 function detectarNombre(texto) {
   const lineas = texto.split('\n').map(l => l.trim()).filter(l => l.length > 2);
   if (lineas.length === 0) return '';
+
+  // Buscar "destinatario:" / "nombre:" explícito
   for (const l of lineas) {
     const m = l.match(/(?:destinatario|nombre|para|sr\.?|sra\.?)[:\s]+(.+)/i);
     if (m && m[1].trim().length > 2) return m[1].trim();
+  }
+
+  // Palabras que NUNCA son un nombre de persona
+  const prohibidas = ['direcc', 'calle', 'colonia', 'envio', 'envío',
+                      'guia', 'guía', 'paquete', 'remitente', 'cp',
+                      'código', 'codigo', 'tel', 'teléfono', 'camino',
+                      'av.', 'avenida', 'metepec', 'méxico', 'mexico',
+                      'santa', 'san', 'maría', 'magdalena', 'zacango',
+                      'forestal', 'dreams', 'lagoons', 'privada',
+                      'framboyanes', 'totocuitlapilco', 'toluca'];
+
+  // Solo aceptar líneas que parezcan "Nombre Apellido" (2-3 palabras capitalizadas)
+  for (const l of lineas.slice(0, 5)) {
+    const low = l.toLowerCase();
+    const tieneProhibida = prohibidas.some(k => low.includes(k));
+    const sinNumeros = !/\d/.test(l);
+    const tieneForma = /^[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+){1,3}$/.test(l);
+    if (!tieneProhibida && sinNumeros && tieneForma) return l;
   }
   return '';
 }
