@@ -1,6 +1,6 @@
 // ============================================
-//  Enrutador PWA — Lógica principal (v6)
-//  OCR con preprocesamiento de imagen
+//  Enrutador PWA — Lógica principal (v7)
+//  OCR con desenfoque mediano + spa+eng + PSM 6
 // ============================================
 
 if ('serviceWorker' in navigator) {
@@ -13,7 +13,6 @@ let packages = JSON.parse(localStorage.getItem('packages') || '[]');
 let ocrResultText = '';
 let cropperInstance = null;
 
-// ---------- DOM ----------
 const btnCapture   = document.getElementById('btnCapture');
 const btnOptimize  = document.getElementById('btnOptimize');
 const cameraInput  = document.getElementById('cameraInput');
@@ -35,27 +34,25 @@ const btnSaveAddress   = document.getElementById('btnSaveAddress');
 const loader     = document.getElementById('loader');
 const loaderText = document.getElementById('loaderText');
 
-// ---------- Utilidades ----------
 function showLoader(msg) { loaderText.textContent = msg || 'Procesando…'; loader.hidden = false; }
 function hideLoader() { loader.hidden = true; }
 function savePackages() { localStorage.setItem('packages', JSON.stringify(packages)); }
 
-// ---------- PREPROCESAMIENTO DE IMAGEN ----------
-// Convierte a escala de grises, aplica auto-contraste y umbralización.
-// Esto mejora drásticamente el OCR en etiquetas.
+// ---------- PREPROCESAMIENTO ----------
+// Escala de grises + estirado de contraste + desenfoque mediano 3x3
+// (el desenfoque elimina el ruido tipo "puntitos" sin borrar los bordes del texto)
 function preprocesarCanvas(canvasOriginal) {
   const w = canvasOriginal.width;
   const h = canvasOriginal.height;
   const canvas = document.createElement('canvas');
-  canvas.width = w;
-  canvas.height = h;
+  canvas.width = w; canvas.height = h;
   const ctx = canvas.getContext('2d');
   ctx.drawImage(canvasOriginal, 0, 0);
 
   const imageData = ctx.getImageData(0, 0, w, h);
   const data = imageData.data;
 
-  // 1) Escala de grises y buscar min/max para auto-contraste
+  // 1) Escala de grises
   const gray = new Uint8ClampedArray(w * h);
   let min = 255, max = 0;
   for (let i = 0, j = 0; i < data.length; i += 4, j++) {
@@ -65,21 +62,50 @@ function preprocesarCanvas(canvasOriginal) {
     if (g > max) max = g;
   }
 
-  // 2) Estirar contraste al rango completo [0, 255]
+  // 2) Estirar contraste al rango completo SIN binarizar
   const range = (max - min) || 1;
+  const stretched = new Uint8ClampedArray(w * h);
+  for (let j = 0; j < gray.length; j++) {
+    stretched[j] = ((gray[j] - min) / range) * 255;
+  }
+
+  // 3) Desenfoque mediano 3x3 (elimina ruido puntual tipo moiré)
+  const blurred = medianBlur3x3(stretched, w, h);
+
+  // 4) Umbralización SUAVE: solo empujo los extremos, dejo el medio
   const out = ctx.createImageData(w, h);
   const od = out.data;
-  for (let j = 0, k = 0; j < gray.length; j++, k += 4) {
-    let v = ((gray[j] - min) / range) * 255;
-    // 3) Umbralización suave: fuerzo valores a blanco o negro puros
-    v = v < 110 ? 0 : v > 160 ? 255 : v;
-    od[k]     = v;
-    od[k + 1] = v;
-    od[k + 2] = v;
-    od[k + 3] = 255;
+  for (let j = 0, k = 0; j < blurred.length; j++, k += 4) {
+    let v = blurred[j];
+    if (v < 80) v = 0;
+    else if (v > 190) v = 255;
+    // El resto se queda tal cual (gris), Tesseract lo maneja bien
+    od[k] = v; od[k+1] = v; od[k+2] = v; od[k+3] = 255;
   }
   ctx.putImageData(out, 0, 0);
   return canvas;
+}
+
+function medianBlur3x3(src, w, h) {
+  const dst = new Uint8ClampedArray(w * h);
+  const ventana = new Array(9);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let n = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = x + dx, ny = y + dy;
+          if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
+            ventana[n++] = src[ny * w + nx];
+          }
+        }
+      }
+      // Ordenar solo los primeros n
+      const sub = ventana.slice(0, n).sort((a, b) => a - b);
+      dst[y * w + x] = sub[Math.floor(sub.length / 2)];
+    }
+  }
+  return dst;
 }
 
 // ---------- Render lista ----------
@@ -113,65 +139,45 @@ function renderPackages() {
   btnOptimize.disabled = packages.length === 0;
 }
 
-// ---------- Captura de foto ----------
+// ---------- Captura ----------
 btnCapture.addEventListener('click', () => cameraInput.click());
 
 cameraInput.addEventListener('change', (e) => {
   if (!e.target.files || e.target.files.length === 0) return;
   const file = e.target.files[0];
-
   const reader = new FileReader();
   reader.onload = (ev) => {
     cropImage.src = ev.target.result;
     cropModal.hidden = false;
-
     if (cropperInstance) { cropperInstance.destroy(); cropperInstance = null; }
-
     setTimeout(() => {
       cropperInstance = new Cropper(cropImage, {
-        viewMode: 1,
-        autoCropArea: 0.7,
-        movable: true,
-        zoomable: true,
-        rotatable: true,
-        scalable: false,
-        background: false,
-        responsive: true
+        viewMode: 1, autoCropArea: 0.8, movable: true, zoomable: true,
+        rotatable: true, scalable: false, background: false, responsive: true
       });
     }, 100);
   };
   reader.readAsDataURL(file);
 });
 
-// ---------- Cancelar recorte ----------
 btnCancelCrop.addEventListener('click', () => {
   if (cropperInstance) { cropperInstance.destroy(); cropperInstance = null; }
   cropModal.hidden = true;
   cameraInput.value = '';
 });
 
-// ---------- Confirmar recorte → preprocesar → OCR ----------
+// ---------- OCR ----------
 btnConfirmCrop.addEventListener('click', async () => {
   if (!cropperInstance) return;
 
-  // Recorte a resolución alta (Tesseract funciona mejor con más píxeles)
   const canvasRecortado = cropperInstance.getCroppedCanvas({
-    maxWidth: 2000,
-    maxHeight: 2000,
-    imageSmoothingEnabled: true,
-    imageSmoothingQuality: 'high'
+    maxWidth: 2200, maxHeight: 2200,
+    imageSmoothingEnabled: true, imageSmoothingQuality: 'high'
   });
+  if (!canvasRecortado) { alert('No se pudo recortar la imagen.'); return; }
 
-  if (!canvasRecortado) {
-    alert('No se pudo recortar la imagen.');
-    return;
-  }
-
-  // Preprocesar: grises + contraste + umbral
   const canvasProcesado = preprocesarCanvas(canvasRecortado);
-
-  // Vista previa: mostrar la imagen procesada (así el usuario ve cómo "lee" Tesseract)
-  labelPreview.src = canvasProcesado.toDataURL('image/jpeg', 0.9);
+  labelPreview.src = canvasProcesado.toDataURL('image/jpeg', 0.92);
 
   cropperInstance.destroy();
   cropperInstance = null;
@@ -185,15 +191,17 @@ btnConfirmCrop.addEventListener('click', async () => {
   showLoader('Preparando imagen…');
   let cancelado = false;
   const timeoutId = setTimeout(() => {
-    cancelado = true;
-    hideLoader();
-    alert('El OCR tardó demasiado. Intenta con una foto más cercana o con mejor luz.');
+    cancelado = true; hideLoader();
+    alert('El OCR tardó demasiado. Intenta con una foto más cercana o mejor luz.');
   }, 120000);
 
   try {
     const blob = await new Promise(res => canvasProcesado.toBlob(res, 'image/png'));
 
-    const resultado = await Tesseract.recognize(blob, 'spa', {
+    // PSM 6 = "asume un bloque uniforme de texto" (ideal para etiquetas)
+    const resultado = await Tesseract.recognize(blob, 'spa+eng', {
+      tessedit_pageseg_mode: '6',
+      preserve_interword_spaces: '1',
       logger: m => {
         if (cancelado) return;
         if (m.status === 'loading tesseract core')             loaderText.textContent = 'Cargando motor OCR…';
@@ -224,34 +232,26 @@ btnConfirmCrop.addEventListener('click', async () => {
   }
 });
 
-// ---------- Heurísticas de extracción ----------
+// ---------- Heurísticas ----------
 function detectarDireccion(texto) {
-  // Normalizar: quitar caracteres raros que suele meter el OCR
   let t = texto
     .replace(/[“”«»]/g, '"')
     .replace(/[^\S\n]+/g, ' ')
     .replace(/[|]/g, 'I');
-
   const lineas = t.split('\n').map(l => l.trim()).filter(l => l.length > 2);
   if (lineas.length === 0) return '';
-
   const textoCompleto = lineas.join(' ');
 
-  // 1) "Dirección completa: ..." o "Dirección: ..."
   const matchDir = textoCompleto.match(/(?:direcci[oó]n\s*(?:completa)?[:\s]+)(.+)/i);
   if (matchDir && matchDir[1].trim().length > 10) {
     return limpiarDireccion(matchDir[1].trim());
   }
-
-  // 2) Bloque que contiene CP (5 dígitos entre 01000 y 99999)
   const idxCP = lineas.findIndex(l => /\b\d{5}\b/.test(l));
   if (idxCP > -1) {
     const inicio = Math.max(0, idxCP - 3);
     const fin = Math.min(lineas.length, idxCP + 1);
     return limpiarDireccion(lineas.slice(inicio, fin).join(', '));
   }
-
-  // 3) Líneas con palabras clave de dirección
   const claves = ['calle', 'av', 'avenida', 'col', 'colonia', 'cp', 'c.p',
                   'no.', 'núm', 'num', 'código postal', 'mz', 'lt',
                   'manzana', 'lote', 'andador', 'priv', 'privada', 'calz',
@@ -261,51 +261,40 @@ function detectarDireccion(texto) {
     return claves.some(k => low.includes(k)) || /\d{3,}/.test(l);
   });
   if (relevantes.length > 0) return limpiarDireccion(relevantes.join(', '));
-
   return limpiarDireccion(lineas.slice(-3).join(', '));
 }
 
 function limpiarDireccion(s) {
-  return s
-    .replace(/\s+/g, ' ')
-    .replace(/\s*,\s*/g, ', ')
-    .replace(/[.,;]+$/, '')
-    .trim();
+  return s.replace(/\s+/g, ' ').replace(/\s*,\s*/g, ', ').replace(/[.,;]+$/, '').trim();
 }
 
 function detectarNombre(texto) {
   const lineas = texto.split('\n').map(l => l.trim()).filter(l => l.length > 2);
   if (lineas.length === 0) return '';
-
   for (const l of lineas) {
     const m = l.match(/(?:destinatario|nombre|para|sr\.?|sra\.?)[:\s]+(.+)/i);
     if (m && m[1].trim().length > 2) return m[1].trim();
   }
-
   const prohibidas = ['direcc', 'calle', 'colonia', 'envio', 'envío',
                       'guia', 'guía', 'paquete', 'remitente', 'cp',
                       'código', 'codigo', 'tel', 'teléfono', 'camino',
                       'av.', 'avenida', 'metepec', 'méxico', 'mexico'];
   for (const l of lineas.slice(0, 4)) {
     const low = l.toLowerCase();
-    const tieneProhibida = prohibidas.some(k => low.includes(k));
-    const pareceNombre = /^[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+){1,3}$/.test(l);
-    if (pareceNombre && !tieneProhibida) return l;
+    const tiene = prohibidas.some(k => low.includes(k));
+    const nombre = /^[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+){1,3}$/.test(l);
+    if (nombre && !tiene) return l;
   }
-
   for (const l of lineas.slice(0, 3)) {
     const low = l.toLowerCase();
     if (!/\d/.test(l) && l.length > 3 && l.length < 45 &&
-        !prohibidas.some(k => low.includes(k))) {
-      return l;
-    }
+        !prohibidas.some(k => low.includes(k))) return l;
   }
   return '';
 }
 
-// ---------- Guardar paquete ----------
+// ---------- Guardar ----------
 btnCancelAddress.addEventListener('click', () => { addressModal.hidden = true; });
-
 btnSaveAddress.addEventListener('click', () => {
   const recipient = inputRecipient.value.trim();
   const address   = inputAddress.value.trim();
@@ -363,9 +352,7 @@ btnOptimize.addEventListener('click', async () => {
 });
 
 function ordenarPorVecinoMasCercano(inicio, lista) {
-  const restantes = [...lista];
-  const orden = [];
-  let actual = inicio;
+  const restantes = [...lista]; const orden = []; let actual = inicio;
   while (restantes.length > 0) {
     let mejorIdx = 0, mejorDist = Infinity;
     for (let i = 0; i < restantes.length; i++) {
@@ -373,8 +360,7 @@ function ordenarPorVecinoMasCercano(inicio, lista) {
       if (d < mejorDist) { mejorDist = d; mejorIdx = i; }
     }
     const elegido = restantes.splice(mejorIdx, 1)[0];
-    orden.push(elegido);
-    actual = elegido.coords;
+    orden.push(elegido); actual = elegido.coords;
   }
   const nuevos = [];
   for (const p of orden) {
