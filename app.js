@@ -1,6 +1,6 @@
 // ============================================
-//  Enrutador PWA — Lógica principal (v7)
-//  OCR con desenfoque mediano + spa+eng + PSM 6
+//  Enrutador PWA — Lógica principal (v9)
+//  + Rotación y aspect ratio en el recorte
 // ============================================
 
 if ('serviceWorker' in navigator) {
@@ -12,6 +12,7 @@ if ('serviceWorker' in navigator) {
 let packages = JSON.parse(localStorage.getItem('packages') || '[]');
 let ocrResultText = '';
 let cropperInstance = null;
+let rotacionActual = 0;
 
 const btnCapture   = document.getElementById('btnCapture');
 const btnOptimize  = document.getElementById('btnOptimize');
@@ -22,6 +23,10 @@ const cropModal      = document.getElementById('cropModal');
 const cropImage      = document.getElementById('cropImage');
 const btnCancelCrop  = document.getElementById('btnCancelCrop');
 const btnConfirmCrop = document.getElementById('btnConfirmCrop');
+const btnRotate      = document.getElementById('btnRotate');
+const btnWide        = document.getElementById('btnWide');
+const btnSquare      = document.getElementById('btnSquare');
+const btnFree        = document.getElementById('btnFree');
 
 const addressModal    = document.getElementById('addressModal');
 const labelPreview    = document.getElementById('labelPreview');
@@ -39,47 +44,48 @@ function hideLoader() { loader.hidden = true; }
 function savePackages() { localStorage.setItem('packages', JSON.stringify(packages)); }
 
 // ---------- PREPROCESAMIENTO ----------
-// Escala de grises + estirado de contraste + desenfoque mediano 3x3
-// (el desenfoque elimina el ruido tipo "puntitos" sin borrar los bordes del texto)
 function preprocesarCanvas(canvasOriginal) {
-  const w = canvasOriginal.width;
-  const h = canvasOriginal.height;
+  const escala = 2;
+  const w = canvasOriginal.width * escala;
+  const h = canvasOriginal.height * escala;
+
   const canvas = document.createElement('canvas');
   canvas.width = w; canvas.height = h;
   const ctx = canvas.getContext('2d');
-  ctx.drawImage(canvasOriginal, 0, 0);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(canvasOriginal, 0, 0, w, h);
 
   const imageData = ctx.getImageData(0, 0, w, h);
   const data = imageData.data;
 
-  // 1) Escala de grises
-  const gray = new Uint8ClampedArray(w * h);
+  const gray = new Float32Array(w * h);
   let min = 255, max = 0;
   for (let i = 0, j = 0; i < data.length; i += 4, j++) {
-    const g = Math.round(0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2]);
+    const g = 0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2];
     gray[j] = g;
     if (g < min) min = g;
     if (g > max) max = g;
   }
 
-  // 2) Estirar contraste al rango completo SIN binarizar
   const range = (max - min) || 1;
-  const stretched = new Uint8ClampedArray(w * h);
-  for (let j = 0; j < gray.length; j++) {
-    stretched[j] = ((gray[j] - min) / range) * 255;
+  const stretched = new Float32Array(w * h);
+  for (let j = 0; j < gray.length; j++) stretched[j] = ((gray[j] - min) / range) * 255;
+
+  const blurred = medianBlur3x3(stretched, w, h);
+  const suave = gaussianBlur3x3(blurred, w, h);
+  const nitida = new Float32Array(w * h);
+  for (let j = 0; j < blurred.length; j++) {
+    const v = blurred[j] + (blurred[j] - suave[j]) * 1.2;
+    nitida[j] = Math.max(0, Math.min(255, v));
   }
 
-  // 3) Desenfoque mediano 3x3 (elimina ruido puntual tipo moiré)
-  const blurred = medianBlur3x3(stretched, w, h);
-
-  // 4) Umbralización SUAVE: solo empujo los extremos, dejo el medio
   const out = ctx.createImageData(w, h);
   const od = out.data;
-  for (let j = 0, k = 0; j < blurred.length; j++, k += 4) {
-    let v = blurred[j];
-    if (v < 80) v = 0;
-    else if (v > 190) v = 255;
-    // El resto se queda tal cual (gris), Tesseract lo maneja bien
+  for (let j = 0, k = 0; j < nitida.length; j++, k += 4) {
+    let v = nitida[j];
+    if (v < 90) v = 0;
+    else if (v > 170) v = 255;
     od[k] = v; od[k+1] = v; od[k+2] = v; od[k+3] = 255;
   }
   ctx.putImageData(out, 0, 0);
@@ -87,20 +93,15 @@ function preprocesarCanvas(canvasOriginal) {
 }
 
 function medianBlur3x3(src, w, h) {
-  const dst = new Uint8ClampedArray(w * h);
+  const dst = new Float32Array(w * h);
   const ventana = new Array(9);
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       let n = 0;
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          const nx = x + dx, ny = y + dy;
-          if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
-            ventana[n++] = src[ny * w + nx];
-          }
-        }
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const nx = x + dx, ny = y + dy;
+        if (nx >= 0 && nx < w && ny >= 0 && ny < h) ventana[n++] = src[ny * w + nx];
       }
-      // Ordenar solo los primeros n
       const sub = ventana.slice(0, n).sort((a, b) => a - b);
       dst[y * w + x] = sub[Math.floor(sub.length / 2)];
     }
@@ -108,7 +109,23 @@ function medianBlur3x3(src, w, h) {
   return dst;
 }
 
-// ---------- Render lista ----------
+function gaussianBlur3x3(src, w, h) {
+  const dst = new Float32Array(w * h);
+  const k = [1, 2, 1, 2, 4, 2, 1, 2, 1];
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let suma = 0, peso = 0, idx = 0;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++, idx++) {
+        const nx = x + dx, ny = y + dy;
+        if (nx >= 0 && nx < w && ny >= 0 && ny < h) { suma += src[ny * w + nx] * k[idx]; peso += k[idx]; }
+      }
+      dst[y * w + x] = suma / peso;
+    }
+  }
+  return dst;
+}
+
+// ---------- Render ----------
 function renderPackages() {
   if (packages.length === 0) {
     packagesList.innerHTML = '<p class="empty">Aún no hay paquetes. Captura una etiqueta para comenzar.</p>';
@@ -149,21 +166,54 @@ cameraInput.addEventListener('change', (e) => {
   reader.onload = (ev) => {
     cropImage.src = ev.target.result;
     cropModal.hidden = false;
+    rotacionActual = 0;
+
     if (cropperInstance) { cropperInstance.destroy(); cropperInstance = null; }
+
     setTimeout(() => {
       cropperInstance = new Cropper(cropImage, {
-        viewMode: 1, autoCropArea: 0.8, movable: true, zoomable: true,
-        rotatable: true, scalable: false, background: false, responsive: true
+        viewMode: 1,
+        aspectRatio: 2.5,      // Por defecto: ancho (ideal etiquetas de paquetería)
+        autoCropArea: 0.9,
+        movable: true,
+        zoomable: true,
+        rotatable: true,
+        scalable: false,
+        background: false,
+        responsive: true,
+        guides: true,
+        center: true,
+        highlight: false
       });
     }, 100);
   };
   reader.readAsDataURL(file);
 });
 
+// ---------- Controles del recorte ----------
+btnRotate.addEventListener('click', () => {
+  if (!cropperInstance) return;
+  rotacionActual = (rotacionActual + 90) % 360;
+  cropperInstance.rotate(rotacionActual);
+});
+
+btnWide.addEventListener('click', () => {
+  if (cropperInstance) cropperInstance.setAspectRatio(2.5);
+});
+
+btnSquare.addEventListener('click', () => {
+  if (cropperInstance) cropperInstance.setAspectRatio(1);
+});
+
+btnFree.addEventListener('click', () => {
+  if (cropperInstance) cropperInstance.setAspectRatio(NaN);
+});
+
 btnCancelCrop.addEventListener('click', () => {
   if (cropperInstance) { cropperInstance.destroy(); cropperInstance = null; }
   cropModal.hidden = true;
   cameraInput.value = '';
+  rotacionActual = 0;
 });
 
 // ---------- OCR ----------
@@ -171,7 +221,7 @@ btnConfirmCrop.addEventListener('click', async () => {
   if (!cropperInstance) return;
 
   const canvasRecortado = cropperInstance.getCroppedCanvas({
-    maxWidth: 2200, maxHeight: 2200,
+    maxWidth: 1600, maxHeight: 1600,
     imageSmoothingEnabled: true, imageSmoothingQuality: 'high'
   });
   if (!canvasRecortado) { alert('No se pudo recortar la imagen.'); return; }
@@ -182,6 +232,7 @@ btnConfirmCrop.addEventListener('click', async () => {
   cropperInstance.destroy();
   cropperInstance = null;
   cropModal.hidden = true;
+  rotacionActual = 0;
 
   inputRecipient.value = '';
   inputAddress.value = '';
@@ -193,30 +244,46 @@ btnConfirmCrop.addEventListener('click', async () => {
   const timeoutId = setTimeout(() => {
     cancelado = true; hideLoader();
     alert('El OCR tardó demasiado. Intenta con una foto más cercana o mejor luz.');
-  }, 120000);
+  }, 150000);
 
   try {
     const blob = await new Promise(res => canvasProcesado.toBlob(res, 'image/png'));
 
-    // PSM 6 = "asume un bloque uniforme de texto" (ideal para etiquetas)
-    const resultado = await Tesseract.recognize(blob, 'spa+eng', {
+    loaderText.textContent = 'Lectura 1/2…';
+    const r1 = await Tesseract.recognize(blob, 'spa', {
       tessedit_pageseg_mode: '6',
       preserve_interword_spaces: '1',
       logger: m => {
         if (cancelado) return;
-        if (m.status === 'loading tesseract core')             loaderText.textContent = 'Cargando motor OCR…';
-        else if (m.status === 'loading language traineddata')  loaderText.textContent = 'Descargando idioma (1ª vez)…';
-        else if (m.status === 'initializing api')              loaderText.textContent = 'Inicializando…';
-        else if (m.status === 'recognizing text')              loaderText.textContent = `Leyendo… ${Math.round(m.progress * 100)}%`;
+        if (m.status === 'recognizing text') loaderText.textContent = `Lectura 1/2… ${Math.round(m.progress * 100)}%`;
+        else if (m.status === 'loading language traineddata') loaderText.textContent = 'Descargando idioma (1ª vez)…';
       }
     });
-
-    clearTimeout(timeoutId);
     if (cancelado) return;
 
-    ocrResultText = resultado.data.text || '';
-    ocrText.textContent = ocrResultText;
+    loaderText.textContent = 'Lectura 2/2…';
+    const r2 = await Tesseract.recognize(blob, 'spa', {
+      tessedit_pageseg_mode: '11',
+      preserve_interword_spaces: '1',
+      logger: m => {
+        if (cancelado) return;
+        if (m.status === 'recognizing text') loaderText.textContent = `Lectura 2/2… ${Math.round(m.progress * 100)}%`;
+      }
+    });
+    if (cancelado) return;
 
+    clearTimeout(timeoutId);
+
+    const t1 = r1.data.text || '';
+    const t2 = r2.data.text || '';
+    const score = (t) => {
+      const palabras = (t.match(/\b[A-Za-zÁÉÍÓÚÑáéíóúñ]{3,}\b/g) || []).length;
+      const tieneCP = /\b\d{5}\b/.test(t) ? 5 : 0;
+      return palabras + tieneCP;
+    };
+    ocrResultText = score(t2) > score(t1) ? t2 : t1;
+
+    ocrText.textContent = ocrResultText;
     inputAddress.value   = detectarDireccion(ocrResultText);
     inputRecipient.value = detectarNombre(ocrResultText);
 
@@ -233,35 +300,41 @@ btnConfirmCrop.addEventListener('click', async () => {
 });
 
 // ---------- Heurísticas ----------
+const CORRECCIONES = [
+  [/\bZACANGD\b/gi, 'ZACANGO'],
+  [/\bMETEPECC?P\b/gi, 'METEPEC, CP'],
+  [/\bMETEPEC\s*CP\b/gi, 'METEPEC, CP'],
+  [/\bCP\s*(\d{5})/gi, 'CP $1'],
+  [/\bMETEPEC\s+(\d{5})/gi, 'METEPEC, CP $1'],
+];
+
+function aplicarCorrecciones(texto) {
+  let t = texto;
+  for (const [re, sub] of CORRECCIONES) t = t.replace(re, sub);
+  return t;
+}
+
 function detectarDireccion(texto) {
-  let t = texto
+  let t = aplicarCorrecciones(texto)
     .replace(/[“”«»]/g, '"')
     .replace(/[^\S\n]+/g, ' ')
     .replace(/[|]/g, 'I');
+
   const lineas = t.split('\n').map(l => l.trim()).filter(l => l.length > 2);
   if (lineas.length === 0) return '';
   const textoCompleto = lineas.join(' ');
 
   const matchDir = textoCompleto.match(/(?:direcci[oó]n\s*(?:completa)?[:\s]+)(.+)/i);
-  if (matchDir && matchDir[1].trim().length > 10) {
-    return limpiarDireccion(matchDir[1].trim());
-  }
-  const idxCP = lineas.findIndex(l => /\b\d{5}\b/.test(l));
+  if (matchDir && matchDir[1].trim().length > 10) return limpiarDireccion(matchDir[1].trim());
+
+  const matchCP = textoCompleto.match(/\b(\d{5})\b/);
+  const idxCP = matchCP ? lineas.findIndex(l => l.includes(matchCP[1])) : -1;
   if (idxCP > -1) {
     const inicio = Math.max(0, idxCP - 3);
     const fin = Math.min(lineas.length, idxCP + 1);
     return limpiarDireccion(lineas.slice(inicio, fin).join(', '));
   }
-  const claves = ['calle', 'av', 'avenida', 'col', 'colonia', 'cp', 'c.p',
-                  'no.', 'núm', 'num', 'código postal', 'mz', 'lt',
-                  'manzana', 'lote', 'andador', 'priv', 'privada', 'calz',
-                  'camino', 'carretera', 'blvd', 'bulevar'];
-  const relevantes = lineas.filter(l => {
-    const low = l.toLowerCase();
-    return claves.some(k => low.includes(k)) || /\d{3,}/.test(l);
-  });
-  if (relevantes.length > 0) return limpiarDireccion(relevantes.join(', '));
-  return limpiarDireccion(lineas.slice(-3).join(', '));
+  return limpiarDireccion(lineas.slice(0, 5).join(', '));
 }
 
 function limpiarDireccion(s) {
@@ -275,20 +348,15 @@ function detectarNombre(texto) {
     const m = l.match(/(?:destinatario|nombre|para|sr\.?|sra\.?)[:\s]+(.+)/i);
     if (m && m[1].trim().length > 2) return m[1].trim();
   }
-  const prohibidas = ['direcc', 'calle', 'colonia', 'envio', 'envío',
-                      'guia', 'guía', 'paquete', 'remitente', 'cp',
-                      'código', 'codigo', 'tel', 'teléfono', 'camino',
-                      'av.', 'avenida', 'metepec', 'méxico', 'mexico'];
+  const prohibidas = ['direcc', 'calle', 'colonia', 'envio', 'envío', 'guia', 'guía',
+                      'paquete', 'remitente', 'cp', 'código', 'codigo', 'tel',
+                      'teléfono', 'camino', 'av.', 'avenida', 'metepec', 'méxico',
+                      'mexico', 'santa', 'maría', 'magdalena', 'zacango'];
   for (const l of lineas.slice(0, 4)) {
     const low = l.toLowerCase();
     const tiene = prohibidas.some(k => low.includes(k));
     const nombre = /^[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+){1,3}$/.test(l);
     if (nombre && !tiene) return l;
-  }
-  for (const l of lineas.slice(0, 3)) {
-    const low = l.toLowerCase();
-    if (!/\d/.test(l) && l.length > 3 && l.length < 45 &&
-        !prohibidas.some(k => low.includes(k))) return l;
   }
   return '';
 }
@@ -319,22 +387,14 @@ btnOptimize.addEventListener('click', async () => {
                   encodeURIComponent(p.address);
       const r = await fetch(url, { headers: { 'Accept-Language': 'es' } });
       const data = await r.json();
-      if (data && data[0]) {
-        p.coords = { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
-      }
+      if (data && data[0]) p.coords = { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
       await new Promise(res => setTimeout(res, 1100));
     }
     const validos = packages.filter(p => p.coords);
-    if (validos.length === 0) {
-      hideLoader();
-      alert('No se pudo geocodificar ninguna dirección.');
-      return;
-    }
+    if (validos.length === 0) { hideLoader(); alert('No se pudo geocodificar ninguna dirección.'); return; }
     const continuar = (origen) => {
       ordenarPorVecinoMasCercano(origen, validos);
-      savePackages();
-      renderPackages();
-      hideLoader();
+      savePackages(); renderPackages(); hideLoader();
       alert('Ruta optimizada. Lista para navegar.');
     };
     if (navigator.geolocation) {
@@ -342,13 +402,8 @@ btnOptimize.addEventListener('click', async () => {
         pos => continuar({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
         () => continuar(validos[0].coords)
       );
-    } else {
-      continuar(validos[0].coords);
-    }
-  } catch (err) {
-    hideLoader();
-    alert('Error al optimizar: ' + err.message);
-  }
+    } else continuar(validos[0].coords);
+  } catch (err) { hideLoader(); alert('Error al optimizar: ' + err.message); }
 });
 
 function ordenarPorVecinoMasCercano(inicio, lista) {

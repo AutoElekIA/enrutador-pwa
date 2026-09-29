@@ -45,11 +45,19 @@
 
   <input type="file" id="cameraInput" accept="image/*" capture="environment" hidden />
 
-  <!-- Modal de recorte de la foto -->
+  <!-- Modal de recorte -->
   <div id="cropModal" class="modal" hidden>
     <div class="modal-content">
       <h2>Recorta la etiqueta</h2>
-      <p class="crop-hint">Ajusta el marco para que solo quede la etiqueta.</p>
+      <p class="crop-hint">Arrastra el marco, pellizca para hacer zoom, o gira la foto si la etiqueta quedó vertical.</p>
+
+      <div class="crop-toolbar">
+        <button id="btnRotate" class="tool-btn">🔄 Girar</button>
+        <button id="btnWide" class="tool-btn">↔️ Ancho</button>
+        <button id="btnSquare" class="tool-btn">⬛ Cuadrado</button>
+        <button id="btnFree" class="tool-btn">⬜ Libre</button>
+      </div>
+
       <div class="crop-container">
         <img id="cropImage" alt="Recortar etiqueta" />
       </div>
@@ -60,7 +68,7 @@
     </div>
   </div>
 
-  <!-- Modal de confirmación de dirección -->
+  <!-- Modal de confirmación -->
   <div id="addressModal" class="modal" hidden>
     <div class="modal-content">
       <h2>Confirma la dirección</h2>

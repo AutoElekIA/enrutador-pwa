@@ -175,3 +175,23 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 }
 .nav-actions .secondary { background: var(--panel-2); }
 .nav-actions .primary { background: var(--primary); }
+/* ---------- Toolbar del recorte ---------- */
+.crop-toolbar {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+.tool-btn {
+  flex: 1;
+  min-width: 70px;
+  padding: 8px 6px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: none;
+  border-radius: 8px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.tool-btn:active { background: var(--accent); }
