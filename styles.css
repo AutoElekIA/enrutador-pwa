@@ -7,7 +7,6 @@
   --muted: #94a3b8;
   --primary: #22c55e;
   --primary-dark: #16a34a;
-  --danger: #ef4444;
   --accent: #3b82f6;
 }
 html, body {
@@ -18,7 +17,6 @@ html, body {
 }
 body { display: flex; flex-direction: column; }
 
-/* ---------- Header ---------- */
 .app-header {
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 16px;
@@ -31,7 +29,6 @@ body { display: flex; flex-direction: column; }
   font-size: 1.4rem; cursor: pointer; padding: 4px 8px;
 }
 
-/* ---------- Main ---------- */
 #app { flex: 1; position: relative; overflow: hidden; }
 .view {
   position: absolute; top: 0; left: 0;
@@ -40,7 +37,6 @@ body { display: flex; flex-direction: column; }
 }
 #map { width: 100%; height: 100%; }
 
-/* ---------- Lista de paquetes ---------- */
 .packages-list { display: flex; flex-direction: column; gap: 10px; }
 .empty {
   text-align: center; color: var(--muted);
@@ -60,7 +56,6 @@ body { display: flex; flex-direction: column; }
   cursor: pointer; padding: 6px;
 }
 
-/* ---------- Footer ---------- */
 .app-footer {
   display: flex; gap: 10px;
   padding: 12px;
@@ -89,8 +84,8 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   background: var(--panel);
   border-radius: 14px;
   padding: 18px;
-  width: 100%; max-width: 420px;
-  max-height: 90vh; overflow-y: auto;
+  width: 100%; max-width: 480px;
+  max-height: 92vh; overflow-y: auto;
   display: flex; flex-direction: column; gap: 12px;
 }
 .modal-content h2 { margin: 0; font-size: 1.1rem; }
@@ -110,24 +105,38 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   padding: 10px; font-size: 0.95rem;
   font-family: inherit; resize: vertical;
 }
-.modal-content details {
-  font-size: 0.8rem; color: var(--muted);
-}
+.modal-content details { font-size: 0.8rem; color: var(--muted); }
 .modal-content pre {
   white-space: pre-wrap; word-break: break-word;
   max-height: 120px; overflow-y: auto;
   background: var(--bg); padding: 8px;
   border-radius: 6px; font-size: 0.75rem;
 }
-.modal-actions {
-  display: flex; gap: 10px; margin-top: 6px;
-}
+.modal-actions { display: flex; gap: 10px; margin-top: 6px; }
 .modal-actions button {
   flex: 1; padding: 12px; border-radius: 8px;
   border: none; font-weight: 600; cursor: pointer; color: white;
 }
 .modal-actions .secondary { background: var(--panel-2); }
 .modal-actions .primary { background: var(--primary); }
+
+/* ---------- Modal de recorte ---------- */
+.crop-hint {
+  margin: 0; font-size: 0.8rem; color: var(--muted);
+}
+.crop-container {
+  width: 100%;
+  max-height: 60vh;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #000;
+}
+.crop-container img {
+  display: block;
+  max-width: 100%;
+  max-height: 60vh;
+  border-radius: 0;
+}
 
 /* ---------- Loader ---------- */
 .loader {
@@ -147,7 +156,6 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .loader p { margin: 0; color: var(--text); font-size: 0.95rem; }
 
-/* ---------- Nav panel (para vista de mapa) ---------- */
 .nav-panel {
   position: absolute; bottom: 16px; left: 16px; right: 16px;
   background: var(--panel); border-radius: 14px;

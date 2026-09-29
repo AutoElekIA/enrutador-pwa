@@ -7,6 +7,7 @@
   <title>Enrutador</title>
   <link rel="manifest" href="manifest.json" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cropperjs@1.6.1/dist/cropper.min.css" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -44,6 +45,22 @@
 
   <input type="file" id="cameraInput" accept="image/*" capture="environment" hidden />
 
+  <!-- Modal de recorte de la foto -->
+  <div id="cropModal" class="modal" hidden>
+    <div class="modal-content">
+      <h2>Recorta la etiqueta</h2>
+      <p class="crop-hint">Ajusta el marco para que solo quede la etiqueta.</p>
+      <div class="crop-container">
+        <img id="cropImage" alt="Recortar etiqueta" />
+      </div>
+      <div class="modal-actions">
+        <button id="btnCancelCrop" class="secondary">Cancelar</button>
+        <button id="btnConfirmCrop" class="primary">✂️ Recortar y leer</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal de confirmación de dirección -->
   <div id="addressModal" class="modal" hidden>
     <div class="modal-content">
       <h2>Confirma la dirección</h2>
@@ -72,6 +89,7 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/cropperjs@1.6.1/dist/cropper.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

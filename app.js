@@ -1,24 +1,28 @@
 // ============================================
-//  Enrutador PWA — Lógica principal
+//  Enrutador PWA — Lógica principal (v4 con recorte)
 // ============================================
 
-// ---------- 1. Service Worker ----------
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('./sw.js')
-    .then(() => console.log('Service Worker registrado'))
+    .then(() => console.log('SW registrado'))
     .catch(err => console.log('Error SW:', err));
 }
 
-// ---------- 2. Estado global ----------
 let packages = JSON.parse(localStorage.getItem('packages') || '[]');
-let currentPhoto = null;
 let ocrResultText = '';
+let cropperInstance = null;
 
-// ---------- 3. Elementos del DOM ----------
+// ---------- DOM ----------
 const btnCapture   = document.getElementById('btnCapture');
 const btnOptimize  = document.getElementById('btnOptimize');
 const cameraInput  = document.getElementById('cameraInput');
 const packagesList = document.getElementById('packagesList');
+
+const cropModal    = document.getElementById('cropModal');
+const cropImage    = document.getElementById('cropImage');
+const btnCancelCrop  = document.getElementById('btnCancelCrop');
+const btnConfirmCrop = document.getElementById('btnConfirmCrop');
+
 const addressModal = document.getElementById('addressModal');
 const labelPreview = document.getElementById('labelPreview');
 const inputRecipient = document.getElementById('inputRecipient');
@@ -26,22 +30,21 @@ const inputAddress   = document.getElementById('inputAddress');
 const ocrText        = document.getElementById('ocrText');
 const btnCancelAddress = document.getElementById('btnCancelAddress');
 const btnSaveAddress   = document.getElementById('btnSaveAddress');
+
 const loader      = document.getElementById('loader');
 const loaderText  = document.getElementById('loaderText');
 
-// ---------- 4. Utilidades ----------
+// ---------- Utilidades ----------
 function showLoader(msg) {
   loaderText.textContent = msg || 'Procesando…';
   loader.hidden = false;
 }
-function hideLoader() {
-  loader.hidden = true;
-}
+function hideLoader() { loader.hidden = true; }
 function savePackages() {
   localStorage.setItem('packages', JSON.stringify(packages));
 }
 
-// ---------- 5. Renderizar lista de paquetes ----------
+// ---------- Render lista ----------
 function renderPackages() {
   if (packages.length === 0) {
     packagesList.innerHTML = '<p class="empty">Aún no hay paquetes. Captura una etiqueta para comenzar.</p>';
@@ -61,7 +64,6 @@ function renderPackages() {
     `;
     packagesList.appendChild(div);
   });
-  // Botones de borrar
   document.querySelectorAll('.pkg-delete').forEach(btn => {
     btn.addEventListener('click', (e) => {
       const idx = parseInt(e.target.dataset.index);
@@ -73,92 +75,152 @@ function renderPackages() {
   btnOptimize.disabled = packages.length === 0;
 }
 
-// ---------- 6. Captura de etiqueta ----------
-btnCapture.addEventListener('click', () => {
-  cameraInput.click();
-});
+// ---------- Captura de foto ----------
+btnCapture.addEventListener('click', () => cameraInput.click());
 
-cameraInput.addEventListener('change', async (e) => {
+cameraInput.addEventListener('change', (e) => {
   if (!e.target.files || e.target.files.length === 0) return;
   const file = e.target.files[0];
-  currentPhoto = file;
 
-  // Mostrar vista previa
+  // Mostrar foto en el modal de recorte
   const reader = new FileReader();
   reader.onload = (ev) => {
-    labelPreview.src = ev.target.result;
+    cropImage.src = ev.target.result;
+    cropModal.hidden = false;
+
+    // Destruir instancia previa si existe
+    if (cropperInstance) {
+      cropperInstance.destroy();
+      cropperInstance = null;
+    }
+
+    // Esperar un instante a que la imagen cargue en el DOM
+    setTimeout(() => {
+      cropperInstance = new Cropper(cropImage, {
+        viewMode: 1,
+        autoCropArea: 0.7,
+        movable: true,
+        zoomable: true,
+        rotatable: true,
+        scalable: false,
+        background: false,
+        responsive: true
+      });
+    }, 100);
   };
   reader.readAsDataURL(file);
+});
 
-  // Abrir modal en modo "cargando"
+// ---------- Cancelar recorte ----------
+btnCancelCrop.addEventListener('click', () => {
+  if (cropperInstance) {
+    cropperInstance.destroy();
+    cropperInstance = null;
+  }
+  cropModal.hidden = true;
+  cameraInput.value = '';
+});
+
+// ---------- Confirmar recorte → OCR ----------
+btnConfirmCrop.addEventListener('click', async () => {
+  if (!cropperInstance) return;
+
+  // Obtener el recorte como canvas
+  const canvas = cropperInstance.getCroppedCanvas({
+    maxWidth: 1200,
+    maxHeight: 1200,
+    imageSmoothingEnabled: true,
+    imageSmoothingQuality: 'high'
+  });
+
+  if (!canvas) {
+    alert('No se pudo recortar la imagen.');
+    return;
+  }
+
+  // Vista previa del recorte en el modal de dirección
+  labelPreview.src = canvas.toDataURL('image/jpeg', 0.85);
+
+  // Cerrar modal de recorte
+  cropperInstance.destroy();
+  cropperInstance = null;
+  cropModal.hidden = true;
+
+  // Preparar modal de dirección
   inputRecipient.value = '';
   inputAddress.value = '';
   ocrText.textContent = '';
   addressModal.hidden = false;
 
-  // Ejecutar OCR
-  showLoader('Leyendo etiqueta…');
+  showLoader('Iniciando OCR…');
+  let cancelado = false;
+  const timeoutId = setTimeout(() => {
+    cancelado = true;
+    hideLoader();
+    alert('El OCR tardó demasiado. Intenta con una foto más cercana o con mejor luz.');
+  }, 90000);
+
   try {
-    const { data: { text } } = await Tesseract.recognize(file, 'spa', {
+    // Convertir canvas a Blob (más eficiente)
+    const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.9));
+
+    const resultado = await Tesseract.recognize(blob, 'spa', {
       logger: m => {
-        if (m.status === 'recognizing text') {
-          loaderText.textContent = `Leyendo… ${Math.round(m.progress * 100)}%`;
-        }
+        if (cancelado) return;
+        if (m.status === 'loading tesseract core')  loaderText.textContent = 'Cargando motor OCR…';
+        else if (m.status === 'loading language traineddata') loaderText.textContent = 'Descargando idioma (1ª vez)…';
+        else if (m.status === 'initializing api')   loaderText.textContent = 'Inicializando…';
+        else if (m.status === 'recognizing text')   loaderText.textContent = `Leyendo… ${Math.round(m.progress * 100)}%`;
       }
     });
-    ocrResultText = text || '';
+
+    clearTimeout(timeoutId);
+    if (cancelado) return;
+
+    ocrResultText = resultado.data.text || '';
     ocrText.textContent = ocrResultText;
 
-    // Intento simple de extraer dirección y destinatario
     const lineas = ocrResultText.split('\n').map(l => l.trim()).filter(l => l.length > 3);
     inputAddress.value   = detectarDireccion(lineas);
     inputRecipient.value = detectarNombre(lineas);
+
   } catch (err) {
+    clearTimeout(timeoutId);
     console.error('Error OCR:', err);
     ocrText.textContent = 'Error al leer la etiqueta: ' + err.message;
+    alert('Error de OCR: ' + err.message);
   } finally {
+    clearTimeout(timeoutId);
     hideLoader();
     cameraInput.value = '';
   }
 });
 
-// ---------- 7. Heurísticas simples de OCR ----------
+// ---------- Heurísticas ----------
 function detectarDireccion(lineas) {
-  // Busca líneas que tengan números y palabras clave de dirección
   const claves = ['calle', 'av', 'avenida', 'col', 'colonia', 'cp', 'c.p', 'no.', 'núm', 'num', 'código postal'];
   for (const l of lineas) {
     const low = l.toLowerCase();
-    if (claves.some(k => low.includes(k)) || /\d{4,5}/.test(l)) {
-      return l;
-    }
+    if (claves.some(k => low.includes(k)) || /\d{4,5}/.test(l)) return l;
   }
-  // Si no encuentra, devuelve las dos últimas líneas
   return lineas.slice(-2).join(', ');
 }
 
 function detectarNombre(lineas) {
-  // La primera línea suele ser el nombre del destinatario
   for (const l of lineas.slice(0, 3)) {
     const low = l.toLowerCase();
-    if (!/\d/.test(l) && l.length < 40 && !low.includes('destinatario')) {
-      return l;
-    }
+    if (!/\d/.test(l) && l.length < 40 && !low.includes('destinatario')) return l;
   }
   return lineas[0] || '';
 }
 
-// ---------- 8. Guardar dirección confirmada ----------
-btnCancelAddress.addEventListener('click', () => {
-  addressModal.hidden = true;
-});
+// ---------- Guardar paquete ----------
+btnCancelAddress.addEventListener('click', () => { addressModal.hidden = true; });
 
 btnSaveAddress.addEventListener('click', () => {
   const recipient = inputRecipient.value.trim();
   const address   = inputAddress.value.trim();
-  if (!address) {
-    alert('Debes escribir una dirección.');
-    return;
-  }
+  if (!address) { alert('Debes escribir una dirección.'); return; }
   packages.push({
     recipient,
     address,
@@ -172,66 +234,44 @@ btnSaveAddress.addEventListener('click', () => {
   addressModal.hidden = true;
 });
 
-// ---------- 9. Optimización de ruta (vecino más cercano) ----------
+// ---------- Optimizar ruta ----------
 btnOptimize.addEventListener('click', async () => {
   if (packages.length === 0) return;
   showLoader('Geocodificando direcciones…');
-
   try {
-    // Geocodificar cada dirección con Nominatim
     for (const p of packages) {
-      if (p.coords) continue; // ya tiene coords
+      if (p.coords) continue;
       const url = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' +
                   encodeURIComponent(p.address);
-      const r = await fetch(url, {
-        headers: { 'Accept-Language': 'es' }
-      });
+      const r = await fetch(url, { headers: { 'Accept-Language': 'es' } });
       const data = await r.json();
       if (data && data[0]) {
         p.coords = { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
       }
-      // Respetar el rate limit de Nominatim (1 req/seg)
       await new Promise(res => setTimeout(res, 1100));
     }
-
     const validos = packages.filter(p => p.coords);
     if (validos.length === 0) {
       hideLoader();
-      alert('No se pudo geocodificar ninguna dirección. Revisa las direcciones.');
+      alert('No se pudo geocodificar ninguna dirección.');
       return;
     }
-
-    // Ordenar con vecino más cercano desde la posición actual (o primer punto)
-    let rutaOrdenada = [];
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        pos => {
-          rutaOrdenada = ordenarPorVecinoMasCercano(
-            { lat: pos.coords.latitude, lon: pos.coords.longitude },
-            validos
-          );
-          savePackages();
-          renderPackages();
-          hideLoader();
-          alert('Ruta optimizada. Lista para navegar.');
-        },
-        err => {
-          // Sin geolocalización, ordenar desde el primer punto
-          rutaOrdenada = ordenarPorVecinoMasCercano(validos[0].coords, validos);
-          savePackages();
-          renderPackages();
-          hideLoader();
-          alert('Ruta optimizada (sin GPS inicial). Lista para navegar.');
-        }
-      );
-    } else {
-      rutaOrdenada = ordenarPorVecinoMasCercano(validos[0].coords, validos);
+    const continuar = (origen) => {
+      ordenarPorVecinoMasCercano(origen, validos);
       savePackages();
       renderPackages();
       hideLoader();
+      alert('Ruta optimizada. Lista para navegar.');
+    };
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        pos => continuar({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
+        () => continuar(validos[0].coords)
+      );
+    } else {
+      continuar(validos[0].coords);
     }
   } catch (err) {
-    console.error(err);
     hideLoader();
     alert('Error al optimizar: ' + err.message);
   }
@@ -242,8 +282,7 @@ function ordenarPorVecinoMasCercano(inicio, lista) {
   const orden = [];
   let actual = inicio;
   while (restantes.length > 0) {
-    let mejorIdx = 0;
-    let mejorDist = Infinity;
+    let mejorIdx = 0, mejorDist = Infinity;
     for (let i = 0; i < restantes.length; i++) {
       const d = distancia(actual, restantes[i].coords);
       if (d < mejorDist) { mejorDist = d; mejorIdx = i; }
@@ -252,17 +291,12 @@ function ordenarPorVecinoMasCercano(inicio, lista) {
     orden.push(elegido);
     actual = elegido.coords;
   }
-  // Reordenar el array global según el orden calculado
-  const nuevosPackages = [];
+  const nuevos = [];
   for (const p of orden) {
     const idx = packages.indexOf(p);
-    if (idx > -1) {
-      nuevosPackages.push(p);
-      packages.splice(idx, 1);
-    }
+    if (idx > -1) { nuevos.push(p); packages.splice(idx, 1); }
   }
-  packages = [...nuevosPackages, ...packages];
-  return packages;
+  packages = [...nuevos, ...packages];
 }
 
 function distancia(a, b) {
@@ -275,7 +309,5 @@ function distancia(a, b) {
   return 2 * R * Math.asin(Math.sqrt(x));
 }
 
-// ---------- 10. Inicio ----------
-document.addEventListener('DOMContentLoaded', () => {
-  renderPackages();
-});
+// ---------- Init ----------
+document.addEventListener('DOMContentLoaded', () => renderPackages());
