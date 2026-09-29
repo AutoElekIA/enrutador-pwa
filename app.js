@@ -1,6 +1,6 @@
 // ============================================
-//  Enrutador PWA — Lógica principal (v9)
-//  + Rotación y aspect ratio en el recorte
+//  Enrutador PWA — Lógica principal (v10)
+//  Preprocesamiento mínimo + doble OCR (crudo y gris)
 // ============================================
 
 if ('serviceWorker' in navigator) {
@@ -43,11 +43,12 @@ function showLoader(msg) { loaderText.textContent = msg || 'Procesando…'; load
 function hideLoader() { loader.hidden = true; }
 function savePackages() { localStorage.setItem('packages', JSON.stringify(packages)); }
 
-// ---------- PREPROCESAMIENTO ----------
+// ---------- Preprocesamiento MÍNIMO ----------
+// Solo escala 1.5x + grises suave. Sin binarizar, sin nitidez.
 function preprocesarCanvas(canvasOriginal) {
-  const escala = 2;
-  const w = canvasOriginal.width * escala;
-  const h = canvasOriginal.height * escala;
+  const escala = 1.5;
+  const w = Math.round(canvasOriginal.width * escala);
+  const h = Math.round(canvasOriginal.height * escala);
 
   const canvas = document.createElement('canvas');
   canvas.width = w; canvas.height = h;
@@ -59,70 +60,22 @@ function preprocesarCanvas(canvasOriginal) {
   const imageData = ctx.getImageData(0, 0, w, h);
   const data = imageData.data;
 
-  const gray = new Float32Array(w * h);
+  // Grises con contraste suave
   let min = 255, max = 0;
+  const gray = new Uint8ClampedArray(w * h);
   for (let i = 0, j = 0; i < data.length; i += 4, j++) {
-    const g = 0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2];
+    const g = Math.round(0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2]);
     gray[j] = g;
     if (g < min) min = g;
     if (g > max) max = g;
   }
-
   const range = (max - min) || 1;
-  const stretched = new Float32Array(w * h);
-  for (let j = 0; j < gray.length; j++) stretched[j] = ((gray[j] - min) / range) * 255;
-
-  const blurred = medianBlur3x3(stretched, w, h);
-  const suave = gaussianBlur3x3(blurred, w, h);
-  const nitida = new Float32Array(w * h);
-  for (let j = 0; j < blurred.length; j++) {
-    const v = blurred[j] + (blurred[j] - suave[j]) * 1.2;
-    nitida[j] = Math.max(0, Math.min(255, v));
+  for (let j = 0, k = 0; j < gray.length; j++, k += 4) {
+    const v = ((gray[j] - min) / range) * 255;
+    data[k] = v; data[k+1] = v; data[k+2] = v; data[k+3] = 255;
   }
-
-  const out = ctx.createImageData(w, h);
-  const od = out.data;
-  for (let j = 0, k = 0; j < nitida.length; j++, k += 4) {
-    let v = nitida[j];
-    if (v < 90) v = 0;
-    else if (v > 170) v = 255;
-    od[k] = v; od[k+1] = v; od[k+2] = v; od[k+3] = 255;
-  }
-  ctx.putImageData(out, 0, 0);
+  ctx.putImageData(imageData, 0, 0);
   return canvas;
-}
-
-function medianBlur3x3(src, w, h) {
-  const dst = new Float32Array(w * h);
-  const ventana = new Array(9);
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      let n = 0;
-      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-        const nx = x + dx, ny = y + dy;
-        if (nx >= 0 && nx < w && ny >= 0 && ny < h) ventana[n++] = src[ny * w + nx];
-      }
-      const sub = ventana.slice(0, n).sort((a, b) => a - b);
-      dst[y * w + x] = sub[Math.floor(sub.length / 2)];
-    }
-  }
-  return dst;
-}
-
-function gaussianBlur3x3(src, w, h) {
-  const dst = new Float32Array(w * h);
-  const k = [1, 2, 1, 2, 4, 2, 1, 2, 1];
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      let suma = 0, peso = 0, idx = 0;
-      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++, idx++) {
-        const nx = x + dx, ny = y + dy;
-        if (nx >= 0 && nx < w && ny >= 0 && ny < h) { suma += src[ny * w + nx] * k[idx]; peso += k[idx]; }
-      }
-      dst[y * w + x] = suma / peso;
-    }
-  }
-  return dst;
 }
 
 // ---------- Render ----------
@@ -167,47 +120,28 @@ cameraInput.addEventListener('change', (e) => {
     cropImage.src = ev.target.result;
     cropModal.hidden = false;
     rotacionActual = 0;
-
     if (cropperInstance) { cropperInstance.destroy(); cropperInstance = null; }
-
     setTimeout(() => {
       cropperInstance = new Cropper(cropImage, {
         viewMode: 1,
-        aspectRatio: 2.5,      // Por defecto: ancho (ideal etiquetas de paquetería)
+        aspectRatio: 2.5,
         autoCropArea: 0.9,
-        movable: true,
-        zoomable: true,
-        rotatable: true,
-        scalable: false,
-        background: false,
-        responsive: true,
-        guides: true,
-        center: true,
-        highlight: false
+        movable: true, zoomable: true, rotatable: true,
+        scalable: false, background: false, responsive: true
       });
     }, 100);
   };
   reader.readAsDataURL(file);
 });
 
-// ---------- Controles del recorte ----------
 btnRotate.addEventListener('click', () => {
   if (!cropperInstance) return;
   rotacionActual = (rotacionActual + 90) % 360;
   cropperInstance.rotate(rotacionActual);
 });
-
-btnWide.addEventListener('click', () => {
-  if (cropperInstance) cropperInstance.setAspectRatio(2.5);
-});
-
-btnSquare.addEventListener('click', () => {
-  if (cropperInstance) cropperInstance.setAspectRatio(1);
-});
-
-btnFree.addEventListener('click', () => {
-  if (cropperInstance) cropperInstance.setAspectRatio(NaN);
-});
+btnWide.addEventListener('click', () => { if (cropperInstance) cropperInstance.setAspectRatio(2.5); });
+btnSquare.addEventListener('click', () => { if (cropperInstance) cropperInstance.setAspectRatio(1); });
+btnFree.addEventListener('click', () => { if (cropperInstance) cropperInstance.setAspectRatio(NaN); });
 
 btnCancelCrop.addEventListener('click', () => {
   if (cropperInstance) { cropperInstance.destroy(); cropperInstance = null; }
@@ -220,14 +154,15 @@ btnCancelCrop.addEventListener('click', () => {
 btnConfirmCrop.addEventListener('click', async () => {
   if (!cropperInstance) return;
 
+  // Recorte en resolución moderada (sin exagerar; a veces MENOS es MÁS)
   const canvasRecortado = cropperInstance.getCroppedCanvas({
-    maxWidth: 1600, maxHeight: 1600,
+    maxWidth: 1400, maxHeight: 1400,
     imageSmoothingEnabled: true, imageSmoothingQuality: 'high'
   });
   if (!canvasRecortado) { alert('No se pudo recortar la imagen.'); return; }
 
-  const canvasProcesado = preprocesarCanvas(canvasRecortado);
-  labelPreview.src = canvasProcesado.toDataURL('image/jpeg', 0.92);
+  const canvasGris = preprocesarCanvas(canvasRecortado);
+  labelPreview.src = canvasGris.toDataURL('image/jpeg', 0.9);
 
   cropperInstance.destroy();
   cropperInstance = null;
@@ -239,32 +174,33 @@ btnConfirmCrop.addEventListener('click', async () => {
   ocrText.textContent = '';
   addressModal.hidden = false;
 
-  showLoader('Preparando imagen…');
+  showLoader('Iniciando OCR…');
   let cancelado = false;
   const timeoutId = setTimeout(() => {
     cancelado = true; hideLoader();
-    alert('El OCR tardó demasiado. Intenta con una foto más cercana o mejor luz.');
+    alert('El OCR tardó demasiado.');
   }, 150000);
 
   try {
-    const blob = await new Promise(res => canvasProcesado.toBlob(res, 'image/png'));
+    const blobCrudo = await new Promise(res => canvasRecortado.toBlob(res, 'image/png'));
+    const blobGris  = await new Promise(res => canvasGris.toBlob(res, 'image/png'));
 
-    loaderText.textContent = 'Lectura 1/2…';
-    const r1 = await Tesseract.recognize(blob, 'spa', {
-      tessedit_pageseg_mode: '6',
-      preserve_interword_spaces: '1',
+    // ---- Pasada 1: imagen ORIGINAL (sin procesar) ----
+    loaderText.textContent = 'Lectura 1/2 (original)…';
+    const r1 = await Tesseract.recognize(blobCrudo, 'spa', {
+      tessedit_pageseg_mode: '4',
       logger: m => {
         if (cancelado) return;
         if (m.status === 'recognizing text') loaderText.textContent = `Lectura 1/2… ${Math.round(m.progress * 100)}%`;
-        else if (m.status === 'loading language traineddata') loaderText.textContent = 'Descargando idioma (1ª vez)…';
+        else if (m.status === 'loading language traineddata') loaderText.textContent = 'Descargando idioma…';
       }
     });
     if (cancelado) return;
 
-    loaderText.textContent = 'Lectura 2/2…';
-    const r2 = await Tesseract.recognize(blob, 'spa', {
-      tessedit_pageseg_mode: '11',
-      preserve_interword_spaces: '1',
+    // ---- Pasada 2: imagen en grises ----
+    loaderText.textContent = 'Lectura 2/2 (grises)…';
+    const r2 = await Tesseract.recognize(blobGris, 'spa', {
+      tessedit_pageseg_mode: '4',
       logger: m => {
         if (cancelado) return;
         if (m.status === 'recognizing text') loaderText.textContent = `Lectura 2/2… ${Math.round(m.progress * 100)}%`;
@@ -274,16 +210,23 @@ btnConfirmCrop.addEventListener('click', async () => {
 
     clearTimeout(timeoutId);
 
-    const t1 = r1.data.text || '';
-    const t2 = r2.data.text || '';
-    const score = (t) => {
-      const palabras = (t.match(/\b[A-Za-zÁÉÍÓÚÑáéíóúñ]{3,}\b/g) || []).length;
-      const tieneCP = /\b\d{5}\b/.test(t) ? 5 : 0;
-      return palabras + tieneCP;
-    };
-    ocrResultText = score(t2) > score(t1) ? t2 : t1;
+    const t1 = (r1.data.text || '').trim();
+    const t2 = (r2.data.text || '').trim();
 
-    ocrText.textContent = ocrResultText;
+    // Score: contar palabras "españolas válidas" + presencia de CP + números de calle
+    const score = (t) => {
+      const palabras = (t.match(/\b[A-Za-zÁÉÍÓÚÑáéíóúñ]{4,}\b/g) || []).length;
+      const cp = /\b\d{5}\b/.test(t) ? 10 : 0;
+      const numCalle = /\b\d{2,4}\b/.test(t) ? 3 : 0;
+      return palabras + cp + numCalle;
+    };
+    const s1 = score(t1), s2 = score(t2);
+
+    // Elegir el mejor, o unir si son complementarios
+    ocrResultText = s1 >= s2 ? t1 : t2;
+
+    ocrText.textContent = `--- Original (${s1}) ---\n${t1}\n\n--- Grises (${s2}) ---\n${t2}\n\n>>> ELEGIDA: ${s1 >= s2 ? 'Original' : 'Grises'}`;
+
     inputAddress.value   = detectarDireccion(ocrResultText);
     inputRecipient.value = detectarNombre(ocrResultText);
 
@@ -300,22 +243,8 @@ btnConfirmCrop.addEventListener('click', async () => {
 });
 
 // ---------- Heurísticas ----------
-const CORRECCIONES = [
-  [/\bZACANGD\b/gi, 'ZACANGO'],
-  [/\bMETEPECC?P\b/gi, 'METEPEC, CP'],
-  [/\bMETEPEC\s*CP\b/gi, 'METEPEC, CP'],
-  [/\bCP\s*(\d{5})/gi, 'CP $1'],
-  [/\bMETEPEC\s+(\d{5})/gi, 'METEPEC, CP $1'],
-];
-
-function aplicarCorrecciones(texto) {
-  let t = texto;
-  for (const [re, sub] of CORRECCIONES) t = t.replace(re, sub);
-  return t;
-}
-
 function detectarDireccion(texto) {
-  let t = aplicarCorrecciones(texto)
+  let t = texto
     .replace(/[“”«»]/g, '"')
     .replace(/[^\S\n]+/g, ' ')
     .replace(/[|]/g, 'I');
@@ -347,16 +276,6 @@ function detectarNombre(texto) {
   for (const l of lineas) {
     const m = l.match(/(?:destinatario|nombre|para|sr\.?|sra\.?)[:\s]+(.+)/i);
     if (m && m[1].trim().length > 2) return m[1].trim();
-  }
-  const prohibidas = ['direcc', 'calle', 'colonia', 'envio', 'envío', 'guia', 'guía',
-                      'paquete', 'remitente', 'cp', 'código', 'codigo', 'tel',
-                      'teléfono', 'camino', 'av.', 'avenida', 'metepec', 'méxico',
-                      'mexico', 'santa', 'maría', 'magdalena', 'zacango'];
-  for (const l of lineas.slice(0, 4)) {
-    const low = l.toLowerCase();
-    const tiene = prohibidas.some(k => low.includes(k));
-    const nombre = /^[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+){1,3}$/.test(l);
-    if (nombre && !tiene) return l;
   }
   return '';
 }
