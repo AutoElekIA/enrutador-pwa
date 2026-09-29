@@ -1,21 +1,19 @@
 // ============================================
-//  Enrutador PWA — Lógica principal (v5)
-//  OCR + recorte + extracción de dirección con CP
+//  Enrutador PWA — Lógica principal (v6)
+//  OCR con preprocesamiento de imagen
 // ============================================
 
-// ---------- 1. Service Worker ----------
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('./sw.js')
     .then(() => console.log('SW registrado'))
     .catch(err => console.log('Error SW:', err));
 }
 
-// ---------- 2. Estado ----------
 let packages = JSON.parse(localStorage.getItem('packages') || '[]');
 let ocrResultText = '';
 let cropperInstance = null;
 
-// ---------- 3. DOM ----------
+// ---------- DOM ----------
 const btnCapture   = document.getElementById('btnCapture');
 const btnOptimize  = document.getElementById('btnOptimize');
 const cameraInput  = document.getElementById('cameraInput');
@@ -37,17 +35,54 @@ const btnSaveAddress   = document.getElementById('btnSaveAddress');
 const loader     = document.getElementById('loader');
 const loaderText = document.getElementById('loaderText');
 
-// ---------- 4. Utilidades ----------
-function showLoader(msg) {
-  loaderText.textContent = msg || 'Procesando…';
-  loader.hidden = false;
-}
+// ---------- Utilidades ----------
+function showLoader(msg) { loaderText.textContent = msg || 'Procesando…'; loader.hidden = false; }
 function hideLoader() { loader.hidden = true; }
-function savePackages() {
-  localStorage.setItem('packages', JSON.stringify(packages));
+function savePackages() { localStorage.setItem('packages', JSON.stringify(packages)); }
+
+// ---------- PREPROCESAMIENTO DE IMAGEN ----------
+// Convierte a escala de grises, aplica auto-contraste y umbralización.
+// Esto mejora drásticamente el OCR en etiquetas.
+function preprocesarCanvas(canvasOriginal) {
+  const w = canvasOriginal.width;
+  const h = canvasOriginal.height;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(canvasOriginal, 0, 0);
+
+  const imageData = ctx.getImageData(0, 0, w, h);
+  const data = imageData.data;
+
+  // 1) Escala de grises y buscar min/max para auto-contraste
+  const gray = new Uint8ClampedArray(w * h);
+  let min = 255, max = 0;
+  for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+    const g = Math.round(0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2]);
+    gray[j] = g;
+    if (g < min) min = g;
+    if (g > max) max = g;
+  }
+
+  // 2) Estirar contraste al rango completo [0, 255]
+  const range = (max - min) || 1;
+  const out = ctx.createImageData(w, h);
+  const od = out.data;
+  for (let j = 0, k = 0; j < gray.length; j++, k += 4) {
+    let v = ((gray[j] - min) / range) * 255;
+    // 3) Umbralización suave: fuerzo valores a blanco o negro puros
+    v = v < 110 ? 0 : v > 160 ? 255 : v;
+    od[k]     = v;
+    od[k + 1] = v;
+    od[k + 2] = v;
+    od[k + 3] = 255;
+  }
+  ctx.putImageData(out, 0, 0);
+  return canvas;
 }
 
-// ---------- 5. Render lista de paquetes ----------
+// ---------- Render lista ----------
 function renderPackages() {
   if (packages.length === 0) {
     packagesList.innerHTML = '<p class="empty">Aún no hay paquetes. Captura una etiqueta para comenzar.</p>';
@@ -78,7 +113,7 @@ function renderPackages() {
   btnOptimize.disabled = packages.length === 0;
 }
 
-// ---------- 6. Captura de foto ----------
+// ---------- Captura de foto ----------
 btnCapture.addEventListener('click', () => cameraInput.click());
 
 cameraInput.addEventListener('change', (e) => {
@@ -90,10 +125,7 @@ cameraInput.addEventListener('change', (e) => {
     cropImage.src = ev.target.result;
     cropModal.hidden = false;
 
-    if (cropperInstance) {
-      cropperInstance.destroy();
-      cropperInstance = null;
-    }
+    if (cropperInstance) { cropperInstance.destroy(); cropperInstance = null; }
 
     setTimeout(() => {
       cropperInstance = new Cropper(cropImage, {
@@ -111,33 +143,35 @@ cameraInput.addEventListener('change', (e) => {
   reader.readAsDataURL(file);
 });
 
-// ---------- 7. Cancelar recorte ----------
+// ---------- Cancelar recorte ----------
 btnCancelCrop.addEventListener('click', () => {
-  if (cropperInstance) {
-    cropperInstance.destroy();
-    cropperInstance = null;
-  }
+  if (cropperInstance) { cropperInstance.destroy(); cropperInstance = null; }
   cropModal.hidden = true;
   cameraInput.value = '';
 });
 
-// ---------- 8. Confirmar recorte → OCR ----------
+// ---------- Confirmar recorte → preprocesar → OCR ----------
 btnConfirmCrop.addEventListener('click', async () => {
   if (!cropperInstance) return;
 
-  const canvas = cropperInstance.getCroppedCanvas({
-    maxWidth: 1400,
-    maxHeight: 1400,
+  // Recorte a resolución alta (Tesseract funciona mejor con más píxeles)
+  const canvasRecortado = cropperInstance.getCroppedCanvas({
+    maxWidth: 2000,
+    maxHeight: 2000,
     imageSmoothingEnabled: true,
     imageSmoothingQuality: 'high'
   });
 
-  if (!canvas) {
+  if (!canvasRecortado) {
     alert('No se pudo recortar la imagen.');
     return;
   }
 
-  labelPreview.src = canvas.toDataURL('image/jpeg', 0.85);
+  // Preprocesar: grises + contraste + umbral
+  const canvasProcesado = preprocesarCanvas(canvasRecortado);
+
+  // Vista previa: mostrar la imagen procesada (así el usuario ve cómo "lee" Tesseract)
+  labelPreview.src = canvasProcesado.toDataURL('image/jpeg', 0.9);
 
   cropperInstance.destroy();
   cropperInstance = null;
@@ -148,24 +182,24 @@ btnConfirmCrop.addEventListener('click', async () => {
   ocrText.textContent = '';
   addressModal.hidden = false;
 
-  showLoader('Iniciando OCR…');
+  showLoader('Preparando imagen…');
   let cancelado = false;
   const timeoutId = setTimeout(() => {
     cancelado = true;
     hideLoader();
     alert('El OCR tardó demasiado. Intenta con una foto más cercana o con mejor luz.');
-  }, 90000);
+  }, 120000);
 
   try {
-    const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.9));
+    const blob = await new Promise(res => canvasProcesado.toBlob(res, 'image/png'));
 
     const resultado = await Tesseract.recognize(blob, 'spa', {
       logger: m => {
         if (cancelado) return;
-        if (m.status === 'loading tesseract core')  loaderText.textContent = 'Cargando motor OCR…';
-        else if (m.status === 'loading language traineddata') loaderText.textContent = 'Descargando idioma (1ª vez)…';
-        else if (m.status === 'initializing api')   loaderText.textContent = 'Inicializando…';
-        else if (m.status === 'recognizing text')   loaderText.textContent = `Leyendo… ${Math.round(m.progress * 100)}%`;
+        if (m.status === 'loading tesseract core')             loaderText.textContent = 'Cargando motor OCR…';
+        else if (m.status === 'loading language traineddata')  loaderText.textContent = 'Descargando idioma (1ª vez)…';
+        else if (m.status === 'initializing api')              loaderText.textContent = 'Inicializando…';
+        else if (m.status === 'recognizing text')              loaderText.textContent = `Leyendo… ${Math.round(m.progress * 100)}%`;
       }
     });
 
@@ -190,20 +224,26 @@ btnConfirmCrop.addEventListener('click', async () => {
   }
 });
 
-// ---------- 9. Heurísticas mejoradas ----------
+// ---------- Heurísticas de extracción ----------
 function detectarDireccion(texto) {
-  const lineas = texto.split('\n').map(l => l.trim()).filter(l => l.length > 2);
+  // Normalizar: quitar caracteres raros que suele meter el OCR
+  let t = texto
+    .replace(/[“”«»]/g, '"')
+    .replace(/[^\S\n]+/g, ' ')
+    .replace(/[|]/g, 'I');
+
+  const lineas = t.split('\n').map(l => l.trim()).filter(l => l.length > 2);
   if (lineas.length === 0) return '';
 
   const textoCompleto = lineas.join(' ');
 
-  // Estrategia 1: buscar "dirección completa:" o "dirección:" y tomar TODO lo que sigue
+  // 1) "Dirección completa: ..." o "Dirección: ..."
   const matchDir = textoCompleto.match(/(?:direcci[oó]n\s*(?:completa)?[:\s]+)(.+)/i);
-  if (matchDir && matchDir[1].trim().length > 15) {
+  if (matchDir && matchDir[1].trim().length > 10) {
     return limpiarDireccion(matchDir[1].trim());
   }
 
-  // Estrategia 2: buscar CP (5 dígitos seguidos) y tomar las 3 líneas antes + la del CP
+  // 2) Bloque que contiene CP (5 dígitos entre 01000 y 99999)
   const idxCP = lineas.findIndex(l => /\b\d{5}\b/.test(l));
   if (idxCP > -1) {
     const inicio = Math.max(0, idxCP - 3);
@@ -211,17 +251,17 @@ function detectarDireccion(texto) {
     return limpiarDireccion(lineas.slice(inicio, fin).join(', '));
   }
 
-  // Estrategia 3: tomar todas las líneas que parezcan de dirección
+  // 3) Líneas con palabras clave de dirección
   const claves = ['calle', 'av', 'avenida', 'col', 'colonia', 'cp', 'c.p',
                   'no.', 'núm', 'num', 'código postal', 'mz', 'lt',
-                  'manzana', 'lote', 'andador', 'priv', 'privada', 'calz'];
+                  'manzana', 'lote', 'andador', 'priv', 'privada', 'calz',
+                  'camino', 'carretera', 'blvd', 'bulevar'];
   const relevantes = lineas.filter(l => {
     const low = l.toLowerCase();
     return claves.some(k => low.includes(k)) || /\d{3,}/.test(l);
   });
   if (relevantes.length > 0) return limpiarDireccion(relevantes.join(', '));
 
-  // Fallback: últimas 3 líneas
   return limpiarDireccion(lineas.slice(-3).join(', '));
 }
 
@@ -237,35 +277,33 @@ function detectarNombre(texto) {
   const lineas = texto.split('\n').map(l => l.trim()).filter(l => l.length > 2);
   if (lineas.length === 0) return '';
 
-  // Buscar "destinatario:" explícito
   for (const l of lineas) {
     const m = l.match(/(?:destinatario|nombre|para|sr\.?|sra\.?)[:\s]+(.+)/i);
     if (m && m[1].trim().length > 2) return m[1].trim();
   }
 
-  // Buscar una primera línea corta sin números que parezca nombre propio
-  const palabrasProhibidas = ['direcc', 'calle', 'colonia', 'envio', 'envío',
-                              'guia', 'guía', 'paquete', 'remitente', 'cp',
-                              'código', 'codigo', 'tel', 'teléfono'];
+  const prohibidas = ['direcc', 'calle', 'colonia', 'envio', 'envío',
+                      'guia', 'guía', 'paquete', 'remitente', 'cp',
+                      'código', 'codigo', 'tel', 'teléfono', 'camino',
+                      'av.', 'avenida', 'metepec', 'méxico', 'mexico'];
   for (const l of lineas.slice(0, 4)) {
     const low = l.toLowerCase();
-    const tienePalabraProhibida = palabrasProhibidas.some(k => low.includes(k));
+    const tieneProhibida = prohibidas.some(k => low.includes(k));
     const pareceNombre = /^[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+){1,3}$/.test(l);
-    if (pareceNombre && !tienePalabraProhibida) return l;
+    if (pareceNombre && !tieneProhibida) return l;
   }
 
-  // Fallback: primera línea sin números ni palabras prohibidas
   for (const l of lineas.slice(0, 3)) {
     const low = l.toLowerCase();
     if (!/\d/.test(l) && l.length > 3 && l.length < 45 &&
-        !palabrasProhibidas.some(k => low.includes(k))) {
+        !prohibidas.some(k => low.includes(k))) {
       return l;
     }
   }
   return '';
 }
 
-// ---------- 10. Guardar paquete ----------
+// ---------- Guardar paquete ----------
 btnCancelAddress.addEventListener('click', () => { addressModal.hidden = true; });
 
 btnSaveAddress.addEventListener('click', () => {
@@ -273,19 +311,15 @@ btnSaveAddress.addEventListener('click', () => {
   const address   = inputAddress.value.trim();
   if (!address) { alert('Debes escribir una dirección.'); return; }
   packages.push({
-    recipient,
-    address,
-    ocr: ocrResultText,
-    coords: null,
-    delivered: false,
-    createdAt: Date.now()
+    recipient, address, ocr: ocrResultText,
+    coords: null, delivered: false, createdAt: Date.now()
   });
   savePackages();
   renderPackages();
   addressModal.hidden = true;
 });
 
-// ---------- 11. Optimizar ruta ----------
+// ---------- Optimizar ruta ----------
 btnOptimize.addEventListener('click', async () => {
   if (packages.length === 0) return;
   showLoader('Geocodificando direcciones…');
@@ -360,5 +394,4 @@ function distancia(a, b) {
   return 2 * R * Math.asin(Math.sqrt(x));
 }
 
-// ---------- 12. Init ----------
 document.addEventListener('DOMContentLoaded', () => renderPackages());

@@ -1,4 +1,4 @@
-const CACHE = 'enrutador-v5';
+const CACHE = 'enrutador-v6';
 const ASSETS = [
   './',
   './index.html',
