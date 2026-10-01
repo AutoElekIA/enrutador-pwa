@@ -68,8 +68,11 @@ async function canvasABlobLigero(canvas) {
 // ---------- Llamada a OCR.space ----------
 async function ocrSpaceReconocer(canvas, apiKey) {
   const blob = await canvasABlobLigero(canvas);
-  console.log('🖼️ Blob a enviar:', blob.size, 'bytes | tipo:', blob.type);
-  console.log('🔑 API key (primeros 6):', apiKey.substring(0, 6) + '...');
+
+  const debugInfo = [];
+  debugInfo.push(`🖼️ Blob: ${blob.size} bytes (${(blob.size/1024).toFixed(1)} KB)`);
+  debugInfo.push(`🔑 API key: ${apiKey ? apiKey.substring(0, 8) + '...' : '❌ VACÍA'}`);
+  debugInfo.push('');
 
   const formData = new FormData();
   formData.append('apikey', apiKey);
@@ -80,32 +83,71 @@ async function ocrSpaceReconocer(canvas, apiKey) {
   formData.append('detectOrientation', 'true');
   formData.append('file', blob, 'etiqueta.jpg');
 
-  const resp = await fetch('https://api.ocr.space/parse/image', {
-    method: 'POST',
-    body: formData
-  });
+  let resp, data;
+  try {
+    resp = await fetch('https://api.ocr.space/parse/image', {
+      method: 'POST',
+      body: formData
+    });
+    debugInfo.push(`📡 HTTP status: ${resp.status}`);
+  } catch (err) {
+    debugInfo.push(`❌ Error de red: ${err.message}`);
+    throw new Error(debugInfo.join('\n'));
+  }
 
-  console.log('📡 HTTP status:', resp.status);
+  try {
+    data = await resp.json();
+  } catch (err) {
+    const texto = await resp.text().catch(() => '(no legible)');
+    debugInfo.push(`❌ No es JSON. Respuesta cruda:`);
+    debugInfo.push(texto.substring(0, 500));
+    throw new Error(debugInfo.join('\n'));
+  }
 
-  const data = await resp.json();
-  console.log('📦 Respuesta completa de OCR.space:');
-  console.log(JSON.stringify(data, null, 2));
+  debugInfo.push(`OCRExitCode: ${data.OCRExitCode !== undefined ? data.OCRExitCode : 'N/A'}`);
+  debugInfo.push(`IsErroredOnProcessing: ${data.IsErroredOnProcessing}`);
+  if (data.ErrorMessage) {
+    debugInfo.push(`ErrorMessage: ${JSON.stringify(data.ErrorMessage)}`);
+  }
+  debugInfo.push('');
 
   if (data.IsErroredOnProcessing) {
-    const msg = data.ErrorMessage
-      ? (Array.isArray(data.ErrorMessage) ? data.ErrorMessage.join(' | ') : data.ErrorMessage)
-      : 'Error desconocido';
-    throw new Error(`OCR.space error: ${msg} (Código: ${data.OCRExitCode})`);
+    debugInfo.push('❌ OCR.space reportó error.');
+    debugInfo.push(`Respuesta completa:\n${JSON.stringify(data, null, 2)}`);
+    throw new Error(debugInfo.join('\n'));
   }
 
   if (!data.ParsedResults || !data.ParsedResults.length) {
-    throw new Error(
-      `OCR.space no devolvió resultados.\n\n` +
-      `HTTP: ${resp.status}\n` +
-      `OCRExitCode: ${data.OCRExitCode || 'N/A'}\n` +
-      `ErrorMessage: ${data.ErrorMessage ? JSON.stringify(data.ErrorMessage) : 'ninguno'}`
-    );
+    debugInfo.push('❌ Sin ParsedResults.');
+    debugInfo.push(`Respuesta completa:\n${JSON.stringify(data, null, 2)}`);
+    throw new Error(debugInfo.join('\n'));
   }
+
+  const parsed = data.ParsedResults[0];
+  debugInfo.push(`📝 ParsedText length: ${parsed.ParsedText ? parsed.ParsedText.length : 0}`);
+  if (parsed.ErrorMessage) {
+    debugInfo.push(`ErrorMessage parsing: ${parsed.ErrorMessage}`);
+  }
+  debugInfo.push('');
+  debugInfo.push('=== TEXTO RECONOCIDO ===');
+  debugInfo.push(parsed.ParsedText || '(vacío)');
+  debugInfo.push('');
+  debugInfo.push('=== RESPUESTA COMPLETA ===');
+  debugInfo.push(JSON.stringify(data, null, 2));
+
+  // Adjuntar el debug al resultado
+  const resultado = parsed.ParsedText || '';
+  const err = new Error('DEBUG_' + debugInfo.join('\n'));
+  err.debugOnly = true;
+  err.textoReal = resultado;
+
+  // Si hay texto, devolvemos normal; si está vacío, lanzamos el debug
+  if (resultado && resultado.trim().length > 0) {
+    return resultado;
+  } else {
+    throw err;
+  }
+}
 
   const parsed = data.ParsedResults[0];
   console.log('📝 ParsedText length:', parsed.ParsedText ? parsed.ParsedText.length : 0);
@@ -190,7 +232,7 @@ btnConfirmCrop.addEventListener('click', async () => {
 
   showLoader('Enviando a OCR.space…');
 
-  try {
+    try {
     const texto = await ocrSpaceReconocer(canvasRecortado, getApiKey());
     ocrResultText = texto;
     ocrText.textContent = texto;
@@ -200,13 +242,22 @@ btnConfirmCrop.addEventListener('click', async () => {
 
   } catch (err) {
     console.error('Error OCR:', err);
-    ocrText.textContent = 'Error: ' + err.message;
-    alert('Error de OCR: ' + err.message);
+    // Mostrar el debug en el desplegable "Texto OCR completo"
+    const msg = err.message || String(err);
+    if (msg.startsWith('DEBUG_')) {
+      ocrText.textContent = msg.substring(6);
+    } else {
+      ocrText.textContent = 'Error: ' + msg;
+    }
+    // NO bloqueamos con alert para que puedas ver el texto
+    // alert solo dice que falló
+    setTimeout(() => {
+      alert('OCR falló. Abre "Texto OCR completo" para ver el diagnóstico.');
+    }, 300);
   } finally {
     hideLoader();
     cameraInput.value = '';
   }
-});
 
 // ---------- Correcciones de OCR ----------
 const CORRECCIONES_OCR = [
