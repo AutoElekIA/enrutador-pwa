@@ -338,11 +338,11 @@ btnSaveAddress.addEventListener('click', () => {
 function limpiarParaGeocodificar(direccion) {
   let d = direccion
     .replace(/\s*,\s*/g, ', ')
-    .replace(/,\s*CP\s*\d{5}/gi, '')        // quita "CP 52161"
-    .replace(/\bCP\s*\d{5}\b/gi, '')         // quita "CP52161"
-    .replace(/\bMetepec\s*,?\s*Metepec\b/gi, 'Metepec')  // quita duplicados
+    // Quita "BERRIOZABALCP.55710", "BERRIOZABALCP 55710", "CP.55710", "CP 55710"
+    .replace(/\b[A-ZÁÉÍÓÚÑ]{3,}\s*CP\.?\s*\d{5}/gi, '')
+    .replace(/\bCP\.?\s*\d{5}\b/gi, '')
     .replace(/\s{2,}/g, ' ')
-    .replace(/,\s*,/g, ',')
+    .replace(/,\s*,/g, ', ')
     .replace(/,\s*$/, '')
     .trim();
   return d;
@@ -354,9 +354,21 @@ function extraerCP(direccion) {
 }
 
 function extraerCiudad(direccion) {
-  const ciudades = ['Metepec', 'Toluca', 'Zinacantepec', 'San Mateo Atenco',
-                    'Lerma', 'Calimaya', 'Mexicaltzingo', 'Chapultepec'];
-  for (const c of ciudades) {
+  // Lista amplia de ciudades del Edomex y CDMX
+  const ciudades = [
+    'Coacalco de Berriozábal', 'Coacalco', 'Tultitlán',
+    'San Mateo Atenco', 'Cuautitlán Izcalli', 'Cuautitlán',
+    'Metepec', 'Toluca', 'Zinacantepec', 'Lerma',
+    'Calimaya', 'Mexicaltzingo', 'Chapultepec',
+    'Ecatepec', 'Tlalnepantla', 'Naucalpan', 'Atizapán',
+    'Nezahualcóyotl', 'Chimalhuacán', 'Texcoco',
+    'Ixtapaluca', 'Chalco', 'Tecámac', 'Acolman',
+    'Ciudad de México', 'CDMX', 'Coyoacán', 'Iztapalapa',
+    'Álvaro Obregón', 'Tlalpan', 'Xochimilco'
+  ];
+  // Ordenar por longitud descendente para capturar nombres compuestos primero
+  const ordenadas = [...ciudades].sort((a, b) => b.length - a.length);
+  for (const c of ordenadas) {
     if (new RegExp(`\\b${c}\\b`, 'i').test(direccion)) return c;
   }
   return '';
@@ -365,18 +377,20 @@ function extraerCiudad(direccion) {
 async function geocodificarDireccion(direccion) {
   const limpia = limpiarParaGeocodificar(direccion);
   const cp = extraerCP(direccion);
-  const ciudad = extraerCiudad(direccion) || 'Metepec'; // Metepec por defecto para tu zona
+  const ciudad = extraerCiudad(direccion);   // ahora puede ser Coacalco, Tultitlán, etc.
 
-  // Variantes reordenadas: CP PRIMERO (porque ya probamos que funciona)
+  console.log('📮 CP:', cp, '| Ciudad:', ciudad, '| Limpia:', limpia);
+
+  // CP primero y sin ciudad, porque el CP ya es único en México
   const variantes = [
-    cp ? `${cp}, ${ciudad}, Estado de México, México` : null,  // 1. Solo CP + ciudad ⭐
-    cp ? `${cp}, México` : null,                                // 2. Solo CP
-    `${limpia}, ${ciudad}, Estado de México, México`,           // 3. Dirección + ciudad + estado
-    `${limpia}, México`,                                         // 4. Dirección + México
-    `${ciudad}, Estado de México, México`                        // 5. Solo ciudad
+    cp ? `${cp}, México` : null,                               // 1. Solo CP ⭐
+    cp && ciudad ? `${cp}, ${ciudad}, México` : null,          // 2. CP + ciudad
+    ciudad ? `${ciudad}, Estado de México, México` : null,     // 3. Solo ciudad
+    `${limpia}, México`,                                        // 4. Dirección limpia + México
+    'Metepec, Estado de México, México'                         // 5. Fallback
   ].filter(Boolean);
 
-  const intentos = [];   // para diagnóstico
+  const intentos = [];
 
   for (let i = 0; i < variantes.length; i++) {
     const consulta = variantes[i];
@@ -384,7 +398,6 @@ async function geocodificarDireccion(direccion) {
       const resultado = await geocodificarConNominatim(consulta);
       if (resultado) {
         console.log(`✅ Variante ${i + 1} OK:`, consulta);
-        console.log(`   → ${resultado.display}`);
         return resultado;
       } else {
         intentos.push(`❌ "${consulta}" → sin resultados`);
@@ -392,9 +405,13 @@ async function geocodificarDireccion(direccion) {
     } catch (err) {
       intentos.push(`⚠️ "${consulta}" → ${err.message}`);
     }
-    // Respetar el rate limit de Nominatim (1 req/seg)
     await new Promise(res => setTimeout(res, 1200));
   }
+
+  const err = new Error('Nominatim no encontró la dirección.\n\nIntentos:\n' + intentos.join('\n'));
+  err.intentos = intentos;
+  throw err;
+}
 
   // Si TODO falló, lanzar error con detalles
   const err = new Error('Nominatim no encontró la dirección.\n\nIntentos:\n' + intentos.join('\n'));
