@@ -294,3 +294,81 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .nav-actions .secondary { background: var(--panel-2); }
 .nav-actions .primary { background: var(--primary); }
 .nav-actions .primary:active { background: var(--primary-dark); }
+/* ---------- Reordenamiento manual ---------- */
+.orden-banner {
+  background: #1e3a8a;
+  color: #dbeafe;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  margin-bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+.reset-btn {
+  background: #3b82f6;
+  color: white;
+  border: none;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.package-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pkg-num {
+  background: var(--primary);
+  color: white;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  font-size: 0.9rem;
+  flex-shrink: 0;
+}
+
+.pkg-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.pkg-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.pkg-move {
+  background: var(--panel-2);
+  color: var(--text);
+  border: none;
+  width: 30px;
+  height: 22px;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  cursor: pointer;
+  padding: 0;
+}
+.pkg-move:active { background: var(--accent); }
+.pkg-move:disabled { opacity: 0.25; cursor: not-allowed; }
+
+.pkg-delete {
+  background: none;
+  border: none;
+  font-size: 1.1rem;
+  cursor: pointer;
+  padding: 2px;
+  color: #ef4444;
+}
