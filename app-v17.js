@@ -4,7 +4,7 @@
 //  + Vista previa de mapa
 // ============================================
 
-const MI_VERSION = 'v26-2026-10-01';
+const MI_VERSION = 'v27-2026-10-01';
 
 // ---------- DOM ----------
 const btnCapture   = document.getElementById('btnCapture');
@@ -351,8 +351,8 @@ btnClosePreview.addEventListener('click', function() {
 btnPreviewMaps.addEventListener('click', function() {
   const p = packages[previewPackageIndex];
   if (!p) return;
-  const query = formatearParaGoogle(p.address);
-  const url = 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(query);
+  const url = 'https://www.google.com/maps/search/?api=1&query=' +
+              encodeURIComponent(p.address);
   window.open(url, '_blank');
 });
 
@@ -419,7 +419,7 @@ btnConfirmCrop.addEventListener('click', async function() {
     const texto = await ocrSpaceReconocer(canvasRecortado, getApiKey());
     ocrResultText = texto;
     ocrText.textContent = texto;
-    inputAddress.value   = detectarDireccion(texto);
+    inputAddress.value   = formatearParaGoogle(detectarDireccion(texto));
     inputRecipient.value = detectarNombre(texto);
   } catch (err) {
     console.error('Error OCR:', err);
@@ -733,7 +733,7 @@ btnCopy.addEventListener('click', async function() {
   const validos = packages.filter(function(p) { return p.coords; });
   const actual = validos[currentStopIndex];
   if (!actual) return;
-  const texto = formatearParaGoogle(actual.address);
+  const texto = actual.address;
   try {
     await navigator.clipboard.writeText(texto);
     alert('📋 Copiada:\n\n' + texto);
@@ -752,8 +752,8 @@ btnOpenMaps.addEventListener('click', function() {
   const validos = packages.filter(function(p) { return p.coords; });
   const actual = validos[currentStopIndex];
   if (!actual) return;
-  const query = formatearParaGoogle(actual.address);
-  const url = 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(query);
+  const url = 'https://www.google.com/maps/search/?api=1&query=' +
+              encodeURIComponent(actual.address);
   window.open(url, '_blank');
 });
 
