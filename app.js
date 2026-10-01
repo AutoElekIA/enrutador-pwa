@@ -1,6 +1,6 @@
 // ============================================
-//  Enrutador PWA — Lógica principal (v12)
-//  OCR.space + correcciones OCR + mejor detección de destinatario
+//  Enrutador PWA — Lógica principal (v16)
+//  OCR.space + geocodificación CP-primero
 // ============================================
 
 if ('serviceWorker' in navigator) {
@@ -73,8 +73,8 @@ async function ocrSpaceReconocer(canvas, apiKey) {
   formData.append('apikey', apiKey);
   formData.append('language', 'spa');
   formData.append('isOverlayRequired', 'false');
-  formData.append('OCREngine', '2');            // motor 2 = mejor para texto pequeño
-  formData.append('scale', 'true');             // reescala internamente
+  formData.append('OCREngine', '2');
+  formData.append('scale', 'true');
   formData.append('detectOrientation', 'true');
   formData.append('file', blob, 'etiqueta.jpg');
 
@@ -93,7 +93,7 @@ async function ocrSpaceReconocer(canvas, apiKey) {
   return data.ParsedResults[0].ParsedText || '';
 }
 
-// ---------- Preprocesamiento visual (solo para mostrar al usuario) ----------
+// ---------- Vista previa ----------
 function prepararVistaPrevia(canvasOriginal) {
   const w = canvasOriginal.width;
   const h = canvasOriginal.height;
@@ -226,20 +226,14 @@ btnConfirmCrop.addEventListener('click', async () => {
   }
 });
 
-// ---------- Correcciones de errores típicos de OCR ----------
+// ---------- Correcciones de OCR ----------
 const CORRECCIONES_OCR = [
-  // METEPECCP → METEPEC, CP
   [/\bMETEPECCP\b/gi, 'METEPEC, CP'],
-  [/\b([A-ZÁÉÍÓÚÑ]{4,})CP\s*(\d{5})/g, '$1, CP $2'],
-  // CP sin espacio después
-  [/\bCP(\d{5})/gi, 'CP $1'],
-  // Ciudades pegadas al CP
-  [/\bMETEPEC\s*(\d{5})/gi, 'METEPEC, CP $1'],
-  // SAN MIGUEL / SANTA MARIA bien formateados
+  [/\b([A-ZÁÉÍÓÚÑ]{4,})CP\.?\s*(\d{5})/g, '$1, CP $2'],
+  [/\bCP\.?\s*(\d{5})/gi, 'CP $1'],
   [/\bSANTA\s+MARIA\b/gi, 'Santa María'],
   [/\bSAN\s+MIGUEL\b/gi, 'San Miguel'],
-  // Múltiples espacios colapsados
-  [/\s{2,}/g, ' '],
+  [/\s{2,}/g, ' ']
 ];
 
 function aplicarCorrecciones(texto) {
@@ -276,22 +270,20 @@ function detectarNombre(texto) {
   const lineas = texto.split('\n').map(l => l.trim()).filter(l => l.length > 2);
   if (lineas.length === 0) return '';
 
-  // Buscar "destinatario:" / "nombre:" explícito
   for (const l of lineas) {
     const m = l.match(/(?:destinatario|nombre|para|sr\.?|sra\.?)[:\s]+(.+)/i);
     if (m && m[1].trim().length > 2) return m[1].trim();
   }
 
-  // Palabras que NUNCA son un nombre de persona
   const prohibidas = ['direcc', 'calle', 'colonia', 'envio', 'envío',
                       'guia', 'guía', 'paquete', 'remitente', 'cp',
                       'código', 'codigo', 'tel', 'teléfono', 'camino',
                       'av.', 'avenida', 'metepec', 'méxico', 'mexico',
                       'santa', 'san', 'maría', 'magdalena', 'zacango',
                       'forestal', 'dreams', 'lagoons', 'privada',
-                      'framboyanes', 'totocuitlapilco', 'toluca'];
+                      'framboyanes', 'totocuitlapilco', 'toluca',
+                      'coacalco', 'tultitlán', 'higuera', 'boulevard'];
 
-  // Solo aceptar líneas que parezcan "Nombre Apellido" (2-3 palabras capitalizadas)
   for (const l of lineas.slice(0, 5)) {
     const low = l.toLowerCase();
     const tieneProhibida = prohibidas.some(k => low.includes(k));
@@ -320,6 +312,7 @@ btnSaveSettings.addEventListener('click', () => {
 
 // ---------- Guardar paquete ----------
 btnCancelAddress.addEventListener('click', () => { addressModal.hidden = true; });
+
 btnSaveAddress.addEventListener('click', () => {
   const recipient = inputRecipient.value.trim();
   const address   = inputAddress.value.trim();
@@ -333,12 +326,10 @@ btnSaveAddress.addEventListener('click', () => {
   addressModal.hidden = true;
 });
 
-// ---------- Optimizar ruta ----------
-// ---------- Geocodificación robusta ----------
+// ---------- Geocodificación ----------
 function limpiarParaGeocodificar(direccion) {
   let d = direccion
     .replace(/\s*,\s*/g, ', ')
-    // Quita "BERRIOZABALCP.55710", "BERRIOZABALCP 55710", "CP.55710", "CP 55710"
     .replace(/\b[A-ZÁÉÍÓÚÑ]{3,}\s*CP\.?\s*\d{5}/gi, '')
     .replace(/\bCP\.?\s*\d{5}\b/gi, '')
     .replace(/\s{2,}/g, ' ')
@@ -354,7 +345,6 @@ function extraerCP(direccion) {
 }
 
 function extraerCiudad(direccion) {
-  // Lista amplia de ciudades del Edomex y CDMX
   const ciudades = [
     'Coacalco de Berriozábal', 'Coacalco', 'Tultitlán',
     'San Mateo Atenco', 'Cuautitlán Izcalli', 'Cuautitlán',
@@ -366,7 +356,6 @@ function extraerCiudad(direccion) {
     'Ciudad de México', 'CDMX', 'Coyoacán', 'Iztapalapa',
     'Álvaro Obregón', 'Tlalpan', 'Xochimilco'
   ];
-  // Ordenar por longitud descendente para capturar nombres compuestos primero
   const ordenadas = [...ciudades].sort((a, b) => b.length - a.length);
   for (const c of ordenadas) {
     if (new RegExp(`\\b${c}\\b`, 'i').test(direccion)) return c;
@@ -374,21 +363,37 @@ function extraerCiudad(direccion) {
   return '';
 }
 
+async function geocodificarConNominatim(consulta) {
+  const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=mx&q=${encodeURIComponent(consulta)}`;
+  console.log('🌐 Fetch:', url);
+
+  const r = await fetch(url, { cache: 'no-store' });
+  console.log('   → HTTP', r.status);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const data = await r.json();
+  console.log('   → Resultados:', data.length);
+
+  if (data && data[0]) {
+    return {
+      lat: parseFloat(data[0].lat),
+      lon: parseFloat(data[0].lon),
+      display: data[0].display_name,
+      query: consulta
+    };
+  }
+  return null;
+}
+
 async function geocodificarDireccion(direccion) {
-  const limpia = limpiarParaGeocodificar(direccion);
   const cp = extraerCP(direccion);
-  const ciudad = extraerCiudad(direccion);   // ahora puede ser Coacalco, Tultitlán, etc.
+  const ciudad = extraerCiudad(direccion);
 
-  console.log('📮 CP:', cp, '| Ciudad:', ciudad, '| Limpia:', limpia);
+  console.log('📮 CP:', cp, '| Ciudad:', ciudad);
 
-  // CP primero y sin ciudad, porque el CP ya es único en México
-  const variantes = [
-    cp ? `${cp}, México` : null,                               // 1. Solo CP ⭐
-    cp && ciudad ? `${cp}, ${ciudad}, México` : null,          // 2. CP + ciudad
-    ciudad ? `${ciudad}, Estado de México, México` : null,     // 3. Solo ciudad
-    `${limpia}, México`,                                        // 4. Dirección limpia + México
-    'Metepec, Estado de México, México'                         // 5. Fallback
-  ].filter(Boolean);
+  const variantes = [];
+  if (cp) variantes.push(cp);
+  if (cp && ciudad) variantes.push(`${cp}, ${ciudad}, México`);
+  if (ciudad) variantes.push(`${ciudad}, Estado de México, México`);
 
   const intentos = [];
 
@@ -408,12 +413,6 @@ async function geocodificarDireccion(direccion) {
     await new Promise(res => setTimeout(res, 1200));
   }
 
-  const err = new Error('Nominatim no encontró la dirección.\n\nIntentos:\n' + intentos.join('\n'));
-  err.intentos = intentos;
-  throw err;
-}
-
-  // Si TODO falló, lanzar error con detalles
   const err = new Error('Nominatim no encontró la dirección.\n\nIntentos:\n' + intentos.join('\n'));
   err.intentos = intentos;
   throw err;
@@ -448,7 +447,6 @@ btnOptimize.addEventListener('click', async () => {
 
     if (validos.length === 0) {
       hideLoader();
-      // Mostrar detalle de los intentos en la consola
       console.group('🔍 Diagnóstico de geocodificación');
       errores.forEach(e => {
         console.log('Dirección:', e.address);
