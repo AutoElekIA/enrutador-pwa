@@ -1,10 +1,10 @@
 // ============================================
-//  Enrutador PWA — Lógica principal (v22)
-//  + Botón Copiar dirección
-//  + Maps con formateo inteligente
+//  Enrutador PWA — Lógica principal (v24)
+//  + Dirección estilo México: Calle Num, Colonia, CP, México
+//  + OCR limpia "Dirección completa:"
 // ============================================
 
-const MI_VERSION = 'v22-2026-10-01';
+const MI_VERSION = 'v24-2026-10-01';
 
 // ---------- DOM ----------
 const btnCapture   = document.getElementById('btnCapture');
@@ -124,31 +124,99 @@ async function ocrSpaceReconocer(canvas, apiKey) {
   e.detalleDebug = true; throw e;
 }
 
-// ---------- Formatear dirección para Google ----------
+// ---------- Extraer componentes de dirección ----------
+function extraerCP(texto) {
+  const m = texto.match(/\b(\d{5})\b/);
+  return m ? m[1] : '';
+}
+
+// Extrae la colonia: suele estar entre el número de calle y el CP
+function extraerColonia(texto) {
+  // Después de quitar "Direccion completa:" y antes del CP
+  // Patrón: ", COLONIA," o ", Colonia,"
+  const partes = texto.split(',').map(function(s) { return s.trim(); });
+  for (let i = 0; i < partes.length; i++) {
+    const p = partes[i];
+    // Colonia = no es número, no es CP, no es "mexico", tiene varias letras, longitud razonable
+    if (p.length > 3 && p.length < 60 &&
+        !/^\d+$/.test(p) &&
+        !/^cp\s*\d{5}$/i.test(p) &&
+        !/^\d{5}$/.test(p) &&
+        !/^m[eé]xico$/i.test(p) &&
+        !/^estado\s+de/i.test(p) &&
+        /[A-ZÁÉÍÓÚÑ]/i.test(p)) {
+      // Si tiene palabras como "seccion", "sección", "sector", "colonia"
+      if (/secci[oó]n|sector|colonia|col\.|fracc|manzana|mz|villa|barrio|pueblo/i.test(p)) {
+        return p;
+      }
+    }
+  }
+  return '';
+}
+
+// ---------- Formatear dirección ESTILO MÉXICO ----------
+// Formato correcto para Google Maps en México: "Calle Numero, Colonia, CP, México"
+// El CP en México ya define: Estado, Municipio, Zona
 function formatearParaGoogle(direccion) {
+  // 1. Extraer CP
+  const cp = extraerCP(direccion);
+
+  // 2. Limpiar el ruido
   let d = direccion
+    // Quitar "Dirección completa:" o "Direccion completa:"
+    .replace(/direcci[oó]n\s*(completa)?[:\s]*/gi, '')
+    // Quitar "BERRIOZABALCP.55710" (palabra pegada al CP)
+    .replace(/([A-ZÁÉÍÓÚÑ]{3,})CP\.?\s*\d{5}/gi, '$1')
+    // Quitar "CP 55710" o "CP.55710"
     .replace(/\bCP\.?\s*\d{5}/gi, '')
+    // Quitar CP suelto
     .replace(/\b\d{5}\b/g, '')
+    // Quitar "Estado de México"
+    .replace(/estado\s+de\s+m[eé]xico/gi, '')
+    // Quitar "México" suelto
+    .replace(/\bm[eé]xico\b/gi, '')
+    // Normalizar comas y espacios
     .replace(/\s*,\s*/g, ', ')
     .replace(/\s{2,}/g, ' ')
-    .trim()
-    .replace(/,\s*$/, '');
+    .replace(/,\s*,/g, ',')
+    .replace(/^\s*,/, '')
+    .replace(/,\s*$/, '')
+    .trim();
 
-  // Pegar número a la calle: "boulevard de las rosas, 386," → "boulevard de las rosas 386,"
-  d = d.replace(/^([A-Za-zÁÉÍÓÚÑáéíóúñ\s.]+?),\s*(\d+[A-Za-z]?)\s*,/,
-    function(m, calle, num) { return calle.trim() + ' ' + num + ','; });
+  // 3. Separar por comas y limpiar cada pedazo
+  let partes = d.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
 
-  // Capitalizar cada palabra (Title Case)
-  d = d.split(' ').map(function(w) {
-    if (w.length === 0) return w;
-    if (w === w.toUpperCase() && w.length > 2) {
-      return w.charAt(0) + w.slice(1).toLowerCase();
+  // 4. Unir calle + número: "boulevard de las rosas, 386" → "boulevard de las rosas 386"
+  if (partes.length >= 2) {
+    const primera = partes[0];
+    const segunda = partes[1];
+    // Si la segunda es solo un número (o número con letra)
+    if (/^\d+[A-Za-z]?$/.test(segunda)) {
+      partes[0] = primera + ' ' + segunda;
+      partes.splice(1, 1);
     }
-    return w;
-  }).join(' ');
+  }
 
-  if (!/m[eé]xico/i.test(d)) d += ', México';
-  return d;
+  // 5. Title Case en cada parte
+  partes = partes.map(function(p) {
+    return p.split(' ').map(function(w) {
+      if (w.length === 0) return w;
+      // Preservar siglas de 2 letras o menos (MZ, LT, etc.)
+      if (w.length <= 2 && w === w.toUpperCase()) return w.toUpperCase();
+      // Si es todo mayúsculas y largo, capitalizar
+      if (w === w.toUpperCase() && w.length > 2) {
+        return w.charAt(0) + w.slice(1).toLowerCase();
+      }
+      return w;
+    }).join(' ');
+  });
+
+  // 6. Armar: "Calle Numero, Colonia, CP, México"
+  let resultado = partes.join(', ');
+  if (cp) resultado += ', ' + cp;
+  resultado += ', México';
+
+  return resultado;
 }
 
 // ---------- Render lista ----------
@@ -170,10 +238,11 @@ function renderPackages() {
   packages.forEach(function(p, i) {
     const esPrimero = (i === 0);
     const esUltimo  = (i === packages.length - 1);
+    const titulo = p.recipient ? p.recipient : ('Paquete ' + (i + 1));
     html += '<div class="package-item" data-idx="' + i + '">' +
               '<div class="pkg-num">' + (i + 1) + '</div>' +
               '<div class="pkg-info">' +
-                '<strong>' + (p.recipient || 'Sin nombre') + '</strong>' +
+                '<strong>' + titulo + '</strong>' +
                 '<span>' + p.address + '</span>' +
               '</div>' +
               '<div class="pkg-controls">' +
@@ -326,49 +395,74 @@ function aplicarCorrecciones(texto) {
 }
 
 function limpiarDireccion(s) {
-  return s.replace(/\s+/g, ' ').replace(/\s*,\s*/g, ', ').replace(/[.,;]+$/, '').trim();
+  return s
+    // Quitar prefijos como "Dirección completa:"
+    .replace(/direcci[oó]n\s*(completa)?[:\s]*/gi, '')
+    .replace(/\s+/g, ' ')
+    .replace(/\s*,\s*/g, ', ')
+    .replace(/[.,;]+$/, '')
+    .trim();
 }
 
+// Detección de dirección: toma desde "Dirección completa:" hasta otra sección
 function detectarDireccion(texto) {
   let t = aplicarCorrecciones(texto).replace(/[""«»]/g, '"').replace(/[|]/g, 'I');
-  const lineas = t.split('\n').map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 2; });
+  const lineas = t.split('\n').map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 1; });
   if (lineas.length === 0) return '';
+
+  const stopWords = ['obs:', 'obs :', 'observaciones:', 'remitente:', 'destinatario:',
+                     'tel:', 'teléfono:', 'guía:', 'guia:', 'pedido:', 'factura:',
+                     'fecha:', 'hora:', 'peso:', 'bultos:', 'contenido:',
+                     'referencia:', 'ref:', 'nota:', 'notas:', 'código:', 'codigo:'];
+
+  let idxInicio = -1;
+  for (let i = 0; i < lineas.length; i++) {
+    if (/direcci[oó]n\s*(?:completa)?/i.test(lineas[i])) {
+      idxInicio = i;
+      // Quitar el prefijo "Dirección completa:" de esa línea
+      lineas[i] = lineas[i].replace(/^.*?direcci[oó]n\s*(?:completa)?[:\s]*/i, '').trim();
+      break;
+    }
+  }
+
+  if (idxInicio > -1) {
+    const resultado = [];
+    for (let i = idxInicio; i < lineas.length; i++) {
+      const low = lineas[i].toLowerCase();
+      let esStop = false;
+      for (let j = 0; j < stopWords.length; j++) {
+        if (low.indexOf(stopWords[j]) === 0) { esStop = true; break; }
+      }
+      if (esStop) break;
+      if (lineas[i].length > 1) resultado.push(lineas[i]);
+    }
+    if (resultado.length > 0) return limpiarDireccion(resultado.join(', '));
+  }
+
+  // Fallback: buscar CP y tomar algunas líneas antes + después
   const textoCompleto = lineas.join(' ');
-  const matchDir = textoCompleto.match(/(?:direcci[oó]n\s*(?:completa)?[:\s]+)(.+)/i);
-  if (matchDir && matchDir[1].trim().length > 10) return limpiarDireccion(matchDir[1].trim());
   const matchCP = textoCompleto.match(/\b(\d{5})\b/);
   let idxCP = -1;
   if (matchCP) idxCP = lineas.findIndex(function(l) { return l.indexOf(matchCP[1]) !== -1; });
   if (idxCP > -1) {
-    const inicio = Math.max(0, idxCP - 3);
-    const fin = Math.min(lineas.length, idxCP + 1);
+    const inicio = Math.max(0, idxCP - 4);
+    const fin = Math.min(lineas.length, idxCP + 2);
     return limpiarDireccion(lineas.slice(inicio, fin).join(', '));
   }
-  return limpiarDireccion(lineas.slice(0, 5).join(', '));
+
+  return limpiarDireccion(lineas.slice(0, 6).join(', '));
 }
 
 function detectarNombre(texto) {
   const lineas = texto.split('\n').map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 2; });
   if (lineas.length === 0) return '';
   for (let i = 0; i < lineas.length; i++) {
-    const m = lineas[i].match(/(?:destinatario|nombre|para)[:\s]+(.+)/i);
+    const m = lineas[i].match(/destinatario[:\s]+(.+)/i);
     if (m && m[1].trim().length > 2) return m[1].trim();
   }
-  const prohibidas = ['direcc', 'calle', 'colonia', 'envio', 'envío', 'guia', 'guía', 'paquete', 'remitente',
-                      'cp', 'código', 'codigo', 'tel', 'teléfono', 'camino', 'av.', 'avenida', 'metepec',
-                      'méxico', 'mexico', 'santa', 'san', 'maría', 'magdalena', 'zacango', 'forestal',
-                      'dreams', 'lagoons', 'privada', 'framboyanes', 'totocuitlapilco', 'toluca',
-                      'coacalco', 'tultitlán', 'higuera', 'boulevard', 'rosas', 'villa', 'flores'];
-  for (let i = 0; i < Math.min(5, lineas.length); i++) {
-    const l = lineas[i];
-    const low = l.toLowerCase();
-    let tieneProhibida = false;
-    for (let j = 0; j < prohibidas.length; j++) {
-      if (low.indexOf(prohibidas[j]) !== -1) { tieneProhibida = true; break; }
-    }
-    const sinNumeros = !/\d/.test(l);
-    const tieneForma = /^[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+){1,3}$/.test(l);
-    if (!tieneProhibida && sinNumeros && tieneForma) return l;
+  for (let i = 0; i < lineas.length; i++) {
+    const m = lineas[i].match(/nombre[:\s]+(.+)/i);
+    if (m && m[1].trim().length > 2) return m[1].trim();
   }
   return '';
 }
@@ -399,25 +493,7 @@ btnSaveAddress.addEventListener('click', function() {
   addressModal.hidden = true;
 });
 
-// ---------- Geocodificación ----------
-function extraerCP(direccion) {
-  const m = direccion.match(/\b(\d{5})\b/);
-  return m ? m[1] : '';
-}
-
-function extraerCiudad(direccion) {
-  const ciudades = ['Coacalco de Berriozábal', 'Coacalco', 'Tultitlán', 'San Mateo Atenco',
-                    'Cuautitlán Izcalli', 'Cuautitlán', 'Metepec', 'Toluca', 'Zinacantepec',
-                    'Lerma', 'Calimaya', 'Mexicaltzingo', 'Chapultepec', 'Ecatepec',
-                    'Tlalnepantla', 'Naucalpan', 'Atizapán', 'Nezahualcóyotl',
-                    'Chimalhuacán', 'Texcoco', 'Ixtapaluca', 'Chalco', 'Tecámac', 'Acolman'];
-  const ordenadas = ciudades.slice().sort(function(a, b) { return b.length - a.length; });
-  for (let i = 0; i < ordenadas.length; i++) {
-    if (new RegExp('\\b' + ordenadas[i] + '\\b', 'i').test(direccion)) return ordenadas[i];
-  }
-  return '';
-}
-
+// ---------- Geocodificación por CP ----------
 async function geocodificarConNominatim(consulta) {
   const url = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=mx&q=' + encodeURIComponent(consulta);
   const r = await fetch(url, { cache: 'no-store' });
@@ -429,27 +505,36 @@ async function geocodificarConNominatim(consulta) {
   return null;
 }
 
+// En México el CP es la clave: busca solo por CP
 async function geocodificarDireccion(direccion) {
   const cp = extraerCP(direccion);
-  const ciudad = extraerCiudad(direccion);
-  const variantes = [];
-  if (cp) variantes.push(cp);
-  if (cp && ciudad) variantes.push(cp + ', ' + ciudad + ', México');
-  if (ciudad) variantes.push(ciudad + ', Estado de México, México');
+  if (!cp) {
+    const err = new Error('No se encontró código postal en la dirección.');
+    err.intentos = ['❌ Sin CP'];
+    throw err;
+  }
 
   const intentos = [];
-  for (let i = 0; i < variantes.length; i++) {
-    const consulta = variantes[i];
-    try {
-      const resultado = await geocodificarConNominatim(consulta);
-      if (resultado) return resultado;
-      intentos.push('❌ "' + consulta + '" → sin resultados');
-    } catch (err) {
-      intentos.push('⚠️ "' + consulta + '" → ' + err.message);
-    }
-    await new Promise(function(res) { setTimeout(res, 1200); });
+  // Intentar 1: solo el CP
+  try {
+    const r1 = await geocodificarConNominatim(cp);
+    if (r1) return r1;
+    intentos.push('❌ "' + cp + '" → sin resultados');
+  } catch (err) {
+    intentos.push('⚠️ "' + cp + '" → ' + err.message);
   }
-  const err = new Error('No se encontró.\n' + intentos.join('\n'));
+
+  // Intentar 2: CP + México
+  await new Promise(function(res) { setTimeout(res, 1200); });
+  try {
+    const r2 = await geocodificarConNominatim(cp + ', México');
+    if (r2) return r2;
+    intentos.push('❌ "' + cp + ', México" → sin resultados');
+  } catch (err) {
+    intentos.push('⚠️ "' + cp + ', México" → ' + err.message);
+  }
+
+  const err = new Error('No se encontró el CP.\n' + intentos.join('\n'));
   err.intentos = intentos;
   throw err;
 }
@@ -574,9 +659,10 @@ function redibujarRuta() {
         html: '<div class="stop-pin"><span>' + (i + 1) + '</span></div>',
         iconSize: [30, 30], iconAnchor: [15, 30]
       });
+      const titulo = p.recipient ? p.recipient : ('Paquete ' + (i + 1));
       const marker = L.marker([p.coords.lat, p.coords.lon], { icon: icono })
         .bindPopup(
-          '<strong>' + (i + 1) + '. ' + (p.recipient || 'Sin nombre') + '</strong><br>' + p.address,
+          '<strong>' + (i + 1) + '. ' + titulo + '</strong><br>' + p.address,
           { autoClose: false, closeOnClick: false, closeButton: true, autoPan: true }
         );
       marker.addTo(mapInstance);
@@ -616,9 +702,16 @@ function actualizarPanelNavegacion() {
     navEta.textContent = '—';
     return;
   }
+
   navCurrentStop.textContent = 'Parada ' + (currentStopIndex + 1) + ' de ' + validos.length;
-  navInstruction.innerHTML = '<strong>' + (actual.recipient || 'Sin nombre') + '</strong><br>' +
-                             '<small>' + actual.address + '</small>';
+
+  let contenido = '';
+  if (actual.recipient) {
+    contenido += '<strong>' + actual.recipient + '</strong><br>';
+  }
+  contenido += '<small>' + actual.address + '</small>';
+  navInstruction.innerHTML = contenido;
+
   if (userLocation) {
     const dist = distancia(userLocation, actual.coords);
     navDistance.textContent = '📏 ' + dist.toFixed(1) + ' km';
@@ -674,15 +767,13 @@ btnCopy.addEventListener('click', async function() {
   }
 });
 
-// ---------- Google Maps con dirección formateada ----------
+// ---------- Google Maps ----------
 btnOpenMaps.addEventListener('click', function() {
   const validos = packages.filter(function(p) { return p.coords; });
   const actual = validos[currentStopIndex];
   if (!actual) return;
 
   const query = formatearParaGoogle(actual.address);
-
-  // Usar /search/ (no /dir/) para que Google muestre la mejor coincidencia
   const url = 'https://www.google.com/maps/search/?api=1&query=' +
               encodeURIComponent(query);
   window.open(url, '_blank');
@@ -692,7 +783,8 @@ btnNext.addEventListener('click', function() {
   const validos = packages.filter(function(p) { return p.coords; });
   const actual = validos[currentStopIndex];
   if (!actual) return;
-  if (!confirm('¿Marcar como entregado?\n\n' + (actual.recipient || 'Sin nombre') + '\n' + actual.address)) return;
+  const titulo = actual.recipient || ('Paquete ' + (currentStopIndex + 1));
+  if (!confirm('¿Marcar como entregado?\n\n' + titulo + '\n' + actual.address)) return;
   actual.delivered = true;
   const idx = packages.indexOf(actual);
   if (idx > -1) packages.splice(idx, 1);
@@ -749,4 +841,4 @@ function distancia(a, b) {
 }
 
 document.addEventListener('DOMContentLoaded', function() { renderPackages(); });
-console.log('app v22 cargado');
+console.log('app v24 cargado');
