@@ -1,11 +1,10 @@
 // ============================================
-//  Enrutador PWA — Lógica principal (v21)
-//  + Popups persistentes
-//  + Maps con dirección real
-//  + Reordenamiento manual
+//  Enrutador PWA — Lógica principal (v22)
+//  + Botón Copiar dirección
+//  + Maps con formateo inteligente
 // ============================================
 
-const MI_VERSION = 'v21-2026-10-01';
+const MI_VERSION = 'v22-2026-10-01';
 
 // ---------- DOM ----------
 const btnCapture   = document.getElementById('btnCapture');
@@ -48,6 +47,7 @@ const navInstruction = document.getElementById('navInstruction');
 const navDistance    = document.getElementById('navDistance');
 const navEta         = document.getElementById('navEta');
 const btnRepeat      = document.getElementById('btnRepeat');
+const btnCopy        = document.getElementById('btnCopy');
 const btnOpenMaps    = document.getElementById('btnOpenMaps');
 const btnNext        = document.getElementById('btnNext');
 
@@ -124,7 +124,34 @@ async function ocrSpaceReconocer(canvas, apiKey) {
   e.detalleDebug = true; throw e;
 }
 
-// ---------- Render lista CON BOTONES DE REORDENAR ----------
+// ---------- Formatear dirección para Google ----------
+function formatearParaGoogle(direccion) {
+  let d = direccion
+    .replace(/\bCP\.?\s*\d{5}/gi, '')
+    .replace(/\b\d{5}\b/g, '')
+    .replace(/\s*,\s*/g, ', ')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+    .replace(/,\s*$/, '');
+
+  // Pegar número a la calle: "boulevard de las rosas, 386," → "boulevard de las rosas 386,"
+  d = d.replace(/^([A-Za-zÁÉÍÓÚÑáéíóúñ\s.]+?),\s*(\d+[A-Za-z]?)\s*,/,
+    function(m, calle, num) { return calle.trim() + ' ' + num + ','; });
+
+  // Capitalizar cada palabra (Title Case)
+  d = d.split(' ').map(function(w) {
+    if (w.length === 0) return w;
+    if (w === w.toUpperCase() && w.length > 2) {
+      return w.charAt(0) + w.slice(1).toLowerCase();
+    }
+    return w;
+  }).join(' ');
+
+  if (!/m[eé]xico/i.test(d)) d += ', México';
+  return d;
+}
+
+// ---------- Render lista ----------
 function renderPackages() {
   if (packages.length === 0) {
     packagesList.innerHTML = '<p class="empty">Aún no hay paquetes. Captura una etiqueta para comenzar.</p>';
@@ -165,14 +192,12 @@ function renderPackages() {
       if (idx > 0) moverPaquete(idx, idx - 1);
     });
   });
-
   document.querySelectorAll('.btn-down').forEach(function(btn) {
     btn.addEventListener('click', function(e) {
       const idx = parseInt(e.target.dataset.idx);
       if (idx < packages.length - 1) moverPaquete(idx, idx + 1);
     });
   });
-
   document.querySelectorAll('.pkg-delete').forEach(function(btn) {
     btn.addEventListener('click', function(e) {
       const idx = parseInt(e.target.dataset.idx);
@@ -472,22 +497,16 @@ btnOptimize.addEventListener('click', async function() {
       navigator.geolocation.getCurrentPosition(
         function(pos) {
           userLocation = { lat: pos.coords.latitude, lon: pos.coords.longitude };
-          if (!ordenManual) {
-            ordenarPorVecinoMasCercano(userLocation, validos);
-          }
+          if (!ordenManual) ordenarPorVecinoMasCercano(userLocation, validos);
           irAlMapa();
         },
         function() {
-          if (!ordenManual) {
-            ordenarPorVecinoMasCercano(validos[0].coords, validos);
-          }
+          if (!ordenManual) ordenarPorVecinoMasCercano(validos[0].coords, validos);
           irAlMapa();
         }
       );
     } else {
-      if (!ordenManual) {
-        ordenarPorVecinoMasCercano(validos[0].coords, validos);
-      }
+      if (!ordenManual) ordenarPorVecinoMasCercano(validos[0].coords, validos);
       irAlMapa();
     }
   } catch (err) {
@@ -527,17 +546,12 @@ function inicializarMapa() {
   redibujarRuta();
 }
 
-// ---------- Redibujar sin cerrar popups ----------
 function redibujarRuta() {
   if (!mapInstance) return;
-
   const validos = packages.filter(function(p) { return p.coords; });
 
-  // Marcador de usuario (se reemplaza solo él)
   if (userLocation) {
-    if (window._userMarker) {
-      mapInstance.removeLayer(window._userMarker);
-    }
+    if (window._userMarker) mapInstance.removeLayer(window._userMarker);
     const userIcon = L.divIcon({
       className: 'user-marker',
       html: '🔵',
@@ -549,7 +563,6 @@ function redibujarRuta() {
     window._userMarker.addTo(mapInstance);
   }
 
-  // Marcadores de paradas: solo rehacer si cambió el número
   const numActual = validos.length;
   if (window._lastNumStops !== numActual || mapMarkers.length !== numActual) {
     mapMarkers.forEach(function(m) { mapInstance.removeLayer(m); });
@@ -572,7 +585,6 @@ function redibujarRuta() {
     window._lastNumStops = numActual;
   }
 
-  // Línea de ruta (se rehace siempre porque depende del GPS)
   if (mapRouteLine) { mapInstance.removeLayer(mapRouteLine); mapRouteLine = null; }
   const coords = [];
   if (userLocation) coords.push([userLocation.lat, userLocation.lon]);
@@ -640,21 +652,39 @@ btnRepeat.addEventListener('click', function() {
   speechSynthesis.speak(utt);
 });
 
-// ---------- Google Maps con DIRECCIÓN REAL ----------
+// ---------- Copiar dirección ----------
+btnCopy.addEventListener('click', async function() {
+  const validos = packages.filter(function(p) { return p.coords; });
+  const actual = validos[currentStopIndex];
+  if (!actual) return;
+
+  const texto = formatearParaGoogle(actual.address);
+
+  try {
+    await navigator.clipboard.writeText(texto);
+    alert('📋 Dirección copiada:\n\n' + texto + '\n\nPégala en Google Maps, Waze o WhatsApp.');
+  } catch (err) {
+    const textarea = document.createElement('textarea');
+    textarea.value = texto;
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textarea);
+    alert('📋 Dirección copiada:\n\n' + texto);
+  }
+});
+
+// ---------- Google Maps con dirección formateada ----------
 btnOpenMaps.addEventListener('click', function() {
   const validos = packages.filter(function(p) { return p.coords; });
   const actual = validos[currentStopIndex];
   if (!actual) return;
 
-  // Enviar la dirección escrita, no coordenadas
-  let query = actual.address;
-  // Limpiar "CP 12345" que a veces confunde a Google
-  query = query.replace(/\bCP\.?\s*\d{5}/gi, '').replace(/\s{2,}/g, ' ').trim();
-  // Añadir México si no está
-  if (!/m[eé]xico/i.test(query)) query += ', México';
+  const query = formatearParaGoogle(actual.address);
 
-  const url = 'https://www.google.com/maps/dir/?api=1&destination=' +
-              encodeURIComponent(query) + '&travelmode=driving';
+  // Usar /search/ (no /dir/) para que Google muestre la mejor coincidencia
+  const url = 'https://www.google.com/maps/search/?api=1&query=' +
+              encodeURIComponent(query);
   window.open(url, '_blank');
 });
 
@@ -680,7 +710,7 @@ btnNext.addEventListener('click', function() {
     return;
   }
   if (currentStopIndex >= restantes.length) currentStopIndex = restantes.length - 1;
-  window._lastNumStops = 0; // forzar redibujo de marcadores
+  window._lastNumStops = 0;
   redibujarRuta();
   renderPackages();
 });
@@ -719,4 +749,4 @@ function distancia(a, b) {
 }
 
 document.addEventListener('DOMContentLoaded', function() { renderPackages(); });
-console.log('app v21 cargado');
+console.log('app v22 cargado');
