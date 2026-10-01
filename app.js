@@ -3,6 +3,15 @@
 //  OCR.space + geocodificación CP-primero
 // ============================================
 
+// ⚠️ DETECTOR DE VERSIÓN — borrar cuando funcione todo
+setTimeout(() => {
+  alert('✅ Versión 66f6bf6 cargada correctamente.\n\nSi ves este mensaje, el código nuevo SÍ está corriendo.');
+}, 800);
+
+// Capturador de errores global
+window.addEventListener('error', (e) => {
+  alert('❌ Error de JavaScript:\n' + e.message + '\n\nLínea: ' + e.lineno);
+});
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('./sw.js')
     .then(() => console.log('SW registrado'))
