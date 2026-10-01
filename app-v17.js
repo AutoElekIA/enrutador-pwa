@@ -1,9 +1,11 @@
 // ============================================
-//  Enrutador PWA — Lógica principal (v20)
-//  + Reordenamiento manual de paradas (▲▼)
+//  Enrutador PWA — Lógica principal (v21)
+//  + Popups persistentes
+//  + Maps con dirección real
+//  + Reordenamiento manual
 // ============================================
 
-const MI_VERSION = 'v20-2026-10-01';
+const MI_VERSION = 'v21-2026-10-01';
 
 // ---------- DOM ----------
 const btnCapture   = document.getElementById('btnCapture');
@@ -57,7 +59,7 @@ let packages = JSON.parse(localStorage.getItem('packages') || '[]');
 let ocrResultText = '';
 let cropperInstance = null;
 let rotacionActual = 0;
-let ordenManual = false;   // ⭐ NUEVO: si el usuario reordena manualmente
+let ordenManual = false;
 
 let mapInstance = null;
 let mapMarkers = [];
@@ -130,7 +132,6 @@ function renderPackages() {
     return;
   }
 
-  // Banner de orden manual
   let html = '';
   if (ordenManual) {
     html += '<div class="orden-banner">' +
@@ -158,7 +159,6 @@ function renderPackages() {
 
   packagesList.innerHTML = html;
 
-  // Listeners ▲
   document.querySelectorAll('.btn-up').forEach(function(btn) {
     btn.addEventListener('click', function(e) {
       const idx = parseInt(e.target.dataset.idx);
@@ -166,7 +166,6 @@ function renderPackages() {
     });
   });
 
-  // Listeners ▼
   document.querySelectorAll('.btn-down').forEach(function(btn) {
     btn.addEventListener('click', function(e) {
       const idx = parseInt(e.target.dataset.idx);
@@ -174,7 +173,6 @@ function renderPackages() {
     });
   });
 
-  // Listeners borrar
   document.querySelectorAll('.pkg-delete').forEach(function(btn) {
     btn.addEventListener('click', function(e) {
       const idx = parseInt(e.target.dataset.idx);
@@ -185,7 +183,6 @@ function renderPackages() {
     });
   });
 
-  // Listener reset orden
   const btnReset = document.getElementById('btnResetOrden');
   if (btnReset) {
     btnReset.addEventListener('click', function() {
@@ -198,7 +195,6 @@ function renderPackages() {
   btnOptimize.disabled = packages.length === 0;
 }
 
-// ⭐ NUEVO: mover paquete en la lista
 function moverPaquete(fromIdx, toIdx) {
   if (fromIdx === toIdx) return;
   const temp = packages[fromIdx];
@@ -476,7 +472,6 @@ btnOptimize.addEventListener('click', async function() {
       navigator.geolocation.getCurrentPosition(
         function(pos) {
           userLocation = { lat: pos.coords.latitude, lon: pos.coords.longitude };
-          // ⭐ Solo ordenar si NO hay orden manual
           if (!ordenManual) {
             ordenarPorVecinoMasCercano(userLocation, validos);
           }
@@ -505,6 +500,8 @@ btnOptimize.addEventListener('click', async function() {
 function mostrarVistaMapa() {
   viewHome.hidden = true;
   viewMap.hidden = false;
+  window._mapFitted = false;
+  window._lastNumStops = 0;
   if (mapInstance) {
     setTimeout(function() { mapInstance.invalidateSize(); redibujarRuta(); }, 150);
   } else {
@@ -530,39 +527,65 @@ function inicializarMapa() {
   redibujarRuta();
 }
 
+// ---------- Redibujar sin cerrar popups ----------
 function redibujarRuta() {
   if (!mapInstance) return;
-  mapMarkers.forEach(function(m) { mapInstance.removeLayer(m); });
-  mapMarkers = [];
-  if (mapRouteLine) { mapInstance.removeLayer(mapRouteLine); mapRouteLine = null; }
-
-  const coords = [];
-  if (userLocation) {
-    const userIcon = L.divIcon({ className: 'user-marker', html: '🔵', iconSize: [20, 20], iconAnchor: [10, 10] });
-    const userMarker = L.marker([userLocation.lat, userLocation.lon], { icon: userIcon })
-      .bindPopup('📍 Tu ubicación actual');
-    userMarker.addTo(mapInstance);
-    mapMarkers.push(userMarker);
-    coords.push([userLocation.lat, userLocation.lon]);
-  }
 
   const validos = packages.filter(function(p) { return p.coords; });
-  validos.forEach(function(p, i) {
-    const icono = L.divIcon({
-      className: 'stop-marker',
-      html: '<div class="stop-pin"><span>' + (i + 1) + '</span></div>',
-      iconSize: [30, 30], iconAnchor: [15, 30]
+
+  // Marcador de usuario (se reemplaza solo él)
+  if (userLocation) {
+    if (window._userMarker) {
+      mapInstance.removeLayer(window._userMarker);
+    }
+    const userIcon = L.divIcon({
+      className: 'user-marker',
+      html: '🔵',
+      iconSize: [20, 20],
+      iconAnchor: [10, 10]
     });
-    const marker = L.marker([p.coords.lat, p.coords.lon], { icon: icono })
-      .bindPopup('<strong>' + (i + 1) + '. ' + (p.recipient || 'Sin nombre') + '</strong><br>' + p.address);
-    marker.addTo(mapInstance);
-    mapMarkers.push(marker);
-    coords.push([p.coords.lat, p.coords.lon]);
-  });
+    window._userMarker = L.marker([userLocation.lat, userLocation.lon], { icon: userIcon })
+      .bindPopup('📍 Tu ubicación actual');
+    window._userMarker.addTo(mapInstance);
+  }
+
+  // Marcadores de paradas: solo rehacer si cambió el número
+  const numActual = validos.length;
+  if (window._lastNumStops !== numActual || mapMarkers.length !== numActual) {
+    mapMarkers.forEach(function(m) { mapInstance.removeLayer(m); });
+    mapMarkers = [];
+
+    validos.forEach(function(p, i) {
+      const icono = L.divIcon({
+        className: 'stop-marker',
+        html: '<div class="stop-pin"><span>' + (i + 1) + '</span></div>',
+        iconSize: [30, 30], iconAnchor: [15, 30]
+      });
+      const marker = L.marker([p.coords.lat, p.coords.lon], { icon: icono })
+        .bindPopup(
+          '<strong>' + (i + 1) + '. ' + (p.recipient || 'Sin nombre') + '</strong><br>' + p.address,
+          { autoClose: false, closeOnClick: false, closeButton: true, autoPan: true }
+        );
+      marker.addTo(mapInstance);
+      mapMarkers.push(marker);
+    });
+    window._lastNumStops = numActual;
+  }
+
+  // Línea de ruta (se rehace siempre porque depende del GPS)
+  if (mapRouteLine) { mapInstance.removeLayer(mapRouteLine); mapRouteLine = null; }
+  const coords = [];
+  if (userLocation) coords.push([userLocation.lat, userLocation.lon]);
+  validos.forEach(function(p) { coords.push([p.coords.lat, p.coords.lon]); });
 
   if (coords.length > 1) {
-    mapRouteLine = L.polyline(coords, { color: '#22c55e', weight: 4, dashArray: '8, 8', opacity: 0.8 }).addTo(mapInstance);
-    mapInstance.fitBounds(mapRouteLine.getBounds(), { padding: [60, 60] });
+    mapRouteLine = L.polyline(coords, {
+      color: '#22c55e', weight: 4, dashArray: '8, 8', opacity: 0.8
+    }).addTo(mapInstance);
+    if (!window._mapFitted) {
+      mapInstance.fitBounds(mapRouteLine.getBounds(), { padding: [60, 60] });
+      window._mapFitted = true;
+    }
   } else if (coords.length === 1) {
     mapInstance.setView(coords[0], 15);
   }
@@ -617,12 +640,21 @@ btnRepeat.addEventListener('click', function() {
   speechSynthesis.speak(utt);
 });
 
+// ---------- Google Maps con DIRECCIÓN REAL ----------
 btnOpenMaps.addEventListener('click', function() {
   const validos = packages.filter(function(p) { return p.coords; });
   const actual = validos[currentStopIndex];
   if (!actual) return;
+
+  // Enviar la dirección escrita, no coordenadas
+  let query = actual.address;
+  // Limpiar "CP 12345" que a veces confunde a Google
+  query = query.replace(/\bCP\.?\s*\d{5}/gi, '').replace(/\s{2,}/g, ' ').trim();
+  // Añadir México si no está
+  if (!/m[eé]xico/i.test(query)) query += ', México';
+
   const url = 'https://www.google.com/maps/dir/?api=1&destination=' +
-              actual.coords.lat + ',' + actual.coords.lon + '&travelmode=driving';
+              encodeURIComponent(query) + '&travelmode=driving';
   window.open(url, '_blank');
 });
 
@@ -648,6 +680,7 @@ btnNext.addEventListener('click', function() {
     return;
   }
   if (currentStopIndex >= restantes.length) currentStopIndex = restantes.length - 1;
+  window._lastNumStops = 0; // forzar redibujo de marcadores
   redibujarRuta();
   renderPackages();
 });
@@ -686,4 +719,4 @@ function distancia(a, b) {
 }
 
 document.addEventListener('DOMContentLoaded', function() { renderPackages(); });
-console.log('app v20 cargado');
+console.log('app v21 cargado');
