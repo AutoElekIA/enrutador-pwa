@@ -68,6 +68,8 @@ async function canvasABlobLigero(canvas) {
 // ---------- Llamada a OCR.space ----------
 async function ocrSpaceReconocer(canvas, apiKey) {
   const blob = await canvasABlobLigero(canvas);
+  console.log('🖼️ Blob a enviar:', blob.size, 'bytes | tipo:', blob.type);
+  console.log('🔑 API key (primeros 6):', apiKey.substring(0, 6) + '...');
 
   const formData = new FormData();
   formData.append('apikey', apiKey);
@@ -82,57 +84,37 @@ async function ocrSpaceReconocer(canvas, apiKey) {
     method: 'POST',
     body: formData
   });
+
+  console.log('📡 HTTP status:', resp.status);
+
   const data = await resp.json();
+  console.log('📦 Respuesta completa de OCR.space:');
+  console.log(JSON.stringify(data, null, 2));
 
   if (data.IsErroredOnProcessing) {
-    throw new Error((data.ErrorMessage && data.ErrorMessage[0]) || 'Error en OCR.space');
+    const msg = data.ErrorMessage
+      ? (Array.isArray(data.ErrorMessage) ? data.ErrorMessage.join(' | ') : data.ErrorMessage)
+      : 'Error desconocido';
+    throw new Error(`OCR.space error: ${msg} (Código: ${data.OCRExitCode})`);
   }
+
   if (!data.ParsedResults || !data.ParsedResults.length) {
-    throw new Error('OCR.space no devolvió texto.');
+    throw new Error(
+      `OCR.space no devolvió resultados.\n\n` +
+      `HTTP: ${resp.status}\n` +
+      `OCRExitCode: ${data.OCRExitCode || 'N/A'}\n` +
+      `ErrorMessage: ${data.ErrorMessage ? JSON.stringify(data.ErrorMessage) : 'ninguno'}`
+    );
   }
-  return data.ParsedResults[0].ParsedText || '';
-}
 
-// ---------- Vista previa ----------
-function prepararVistaPrevia(canvasOriginal) {
-  const w = canvasOriginal.width;
-  const h = canvasOriginal.height;
-  const canvas = document.createElement('canvas');
-  canvas.width = w; canvas.height = h;
-  const ctx = canvas.getContext('2d');
-  ctx.drawImage(canvasOriginal, 0, 0);
-  return canvas;
-}
+  const parsed = data.ParsedResults[0];
+  console.log('📝 ParsedText length:', parsed.ParsedText ? parsed.ParsedText.length : 0);
 
-// ---------- Render ----------
-function renderPackages() {
-  if (packages.length === 0) {
-    packagesList.innerHTML = '<p class="empty">Aún no hay paquetes. Captura una etiqueta para comenzar.</p>';
-    btnOptimize.disabled = true;
-    return;
+  if (parsed.ErrorMessage && !parsed.ParsedText) {
+    throw new Error(`Error en parsing: ${parsed.ErrorMessage}`);
   }
-  packagesList.innerHTML = '';
-  packages.forEach((p, i) => {
-    const div = document.createElement('div');
-    div.className = 'package-item';
-    div.innerHTML = `
-      <div class="pkg-info">
-        <strong>${i + 1}. ${p.recipient || 'Sin nombre'}</strong>
-        <span>${p.address}</span>
-      </div>
-      <button class="pkg-delete" data-index="${i}">🗑️</button>
-    `;
-    packagesList.appendChild(div);
-  });
-  document.querySelectorAll('.pkg-delete').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      const idx = parseInt(e.target.dataset.index);
-      packages.splice(idx, 1);
-      savePackages();
-      renderPackages();
-    });
-  });
-  btnOptimize.disabled = packages.length === 0;
+
+  return parsed.ParsedText || '';
 }
 
 // ---------- Captura ----------
