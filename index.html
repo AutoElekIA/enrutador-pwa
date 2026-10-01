@@ -10,53 +10,24 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cropperjs@1.6.1/dist/cropper.min.css" />
   <link rel="stylesheet" href="styles.css" />
 
-  <!-- 🔪 MATAR SERVICE WORKERS Y CACHÉS (temporal) -->
   <script>
     (function() {
       if ('serviceWorker' in navigator) {
         navigator.serviceWorker.getRegistrations().then(function(regs) {
-          for (var i = 0; i < regs.length; i++) {
-            regs[i].unregister();
-            console.log('SW unregistered:', regs[i].scope);
-          }
+          for (var i = 0; i < regs.length; i++) regs[i].unregister();
         });
       }
       if (window.caches) {
         caches.keys().then(function(keys) {
-          keys.forEach(function(k) {
-            caches.delete(k);
-            console.log('Cache deleted:', k);
-          });
+          keys.forEach(function(k) { caches.delete(k); });
         });
       }
     })();
   </script>
 </head>
 <body>
-    <!-- 📺 Panel de errores visible -->
-  <div id="errorPanel" style="display:none;position:fixed;top:0;left:0;right:0;background:#7f1d1d;color:#fff;padding:12px;z-index:99999;font-family:monospace;font-size:12px;max-height:60vh;overflow:auto;white-space:pre-wrap;"></div>
-  <script>
-    window.addEventListener('error', function(e) {
-      var p = document.getElementById('errorPanel');
-      p.style.display = 'block';
-      p.textContent += '❌ ' + (e.message || e.error) + '\n   en ' + (e.filename || '?') + ':' + e.lineno + '\n\n';
-    });
-    window.addEventListener('unhandledrejection', function(e) {
-      var p = document.getElementById('errorPanel');
-      p.style.display = 'block';
-      p.textContent += '❌ Promesa rechazada: ' + (e.reason && e.reason.message ? e.reason.message : e.reason) + '\n\n';
-    });
-    setTimeout(function() {
-      var p = document.getElementById('errorPanel');
-      if (p.style.display === 'none') {
-        p.style.display = 'block';
-        p.style.background = '#14532d';
-        p.textContent = '✅ JS cargó sin errores. Si el botón no responde, el problema es otro.';
-      }
-    }, 2000);
-  </script>
   <header class="app-header">
-    <h1>Enrutador <small id="versionTag" style="font-size:0.7rem;color:#22c55e;">v17</small></h1>
+    <h1>Enrutador <small id="versionTag" style="font-size:0.7rem;color:#22c55e;">v19</small></h1>
     <button id="btnSettings" class="icon-btn" title="Ajustes">⚙️</button>
   </header>
 
@@ -66,9 +37,14 @@
         <p class="empty">Aún no hay paquetes. Captura una etiqueta para comenzar.</p>
       </div>
     </section>
+
     <section id="viewMap" class="view" hidden>
       <div id="map"></div>
-      <div id="navPanel" class="nav-panel" hidden>
+      <button id="btnExitNav" class="exit-nav-btn">✕</button>
+      <div id="navPanel" class="nav-panel">
+        <div class="nav-header">
+          <span id="navCurrentStop">Parada 1 de 1</span>
+        </div>
         <div class="nav-instruction" id="navInstruction">—</div>
         <div class="nav-meta">
           <span id="navDistance">—</span>
@@ -76,7 +52,8 @@
         </div>
         <div class="nav-actions">
           <button id="btnRepeat" class="secondary">🔊 Repetir</button>
-          <button id="btnNext" class="primary">✓ Llegué / Siguiente</button>
+          <button id="btnOpenMaps" class="secondary">🚗 Maps</button>
+          <button id="btnNext" class="primary">✓ Llegué</button>
         </div>
       </div>
     </section>
@@ -89,19 +66,16 @@
 
   <input type="file" id="cameraInput" accept="image/*" capture="environment" hidden />
 
-  <!-- Modal de recorte -->
   <div id="cropModal" class="modal" hidden>
     <div class="modal-content">
       <h2>Recorta la etiqueta</h2>
       <p class="crop-hint">Arrastra el marco, pellizca para hacer zoom, o gira la foto si la etiqueta quedó vertical.</p>
-
       <div class="crop-toolbar">
         <button id="btnRotate" class="tool-btn">🔄 Girar</button>
         <button id="btnWide" class="tool-btn">↔️ Ancho</button>
         <button id="btnSquare" class="tool-btn">⬛ Cuadrado</button>
         <button id="btnFree" class="tool-btn">⬜ Libre</button>
       </div>
-
       <div class="crop-container">
         <img id="cropImage" alt="Recortar etiqueta" />
       </div>
@@ -112,7 +86,6 @@
     </div>
   </div>
 
-  <!-- Modal de confirmación -->
   <div id="addressModal" class="modal" hidden>
     <div class="modal-content">
       <h2>Confirma la dirección</h2>
@@ -134,7 +107,6 @@
     </div>
   </div>
 
-  <!-- Modal de ajustes -->
   <div id="settingsModal" class="modal" hidden>
     <div class="modal-content">
       <h2>Ajustes</h2>

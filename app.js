@@ -1,10 +1,9 @@
 // ============================================
-//  Enrutador PWA — Lógica principal (v18)
-//  Código limpio y verificado — sin errores de sintaxis
+//  Enrutador PWA — Lógica principal (v19)
+//  Con navegación: mapa, pines, voz y Google Maps
 // ============================================
 
-// Versión visible
-const MI_VERSION = 'v18-2026-10-01';
+const MI_VERSION = 'v19-2026-10-01';
 
 // ---------- Referencias DOM ----------
 const btnCapture   = document.getElementById('btnCapture');
@@ -12,6 +11,10 @@ const btnOptimize  = document.getElementById('btnOptimize');
 const btnSettings  = document.getElementById('btnSettings');
 const cameraInput  = document.getElementById('cameraInput');
 const packagesList = document.getElementById('packagesList');
+
+const viewHome = document.getElementById('viewHome');
+const viewMap  = document.getElementById('viewMap');
+const btnExitNav = document.getElementById('btnExitNav');
 
 const cropModal      = document.getElementById('cropModal');
 const cropImage      = document.getElementById('cropImage');
@@ -38,6 +41,14 @@ const btnSaveSettings    = document.getElementById('btnSaveSettings');
 const loader     = document.getElementById('loader');
 const loaderText = document.getElementById('loaderText');
 
+const navCurrentStop = document.getElementById('navCurrentStop');
+const navInstruction = document.getElementById('navInstruction');
+const navDistance    = document.getElementById('navDistance');
+const navEta         = document.getElementById('navEta');
+const btnRepeat      = document.getElementById('btnRepeat');
+const btnOpenMaps    = document.getElementById('btnOpenMaps');
+const btnNext        = document.getElementById('btnNext');
+
 const versionTag = document.getElementById('versionTag');
 if (versionTag) versionTag.textContent = MI_VERSION;
 
@@ -46,6 +57,14 @@ let packages = JSON.parse(localStorage.getItem('packages') || '[]');
 let ocrResultText = '';
 let cropperInstance = null;
 let rotacionActual = 0;
+
+// Estado de navegación
+let mapInstance = null;
+let mapMarkers = [];
+let mapRouteLine = null;
+let currentStopIndex = 0;
+let userLocation = null;
+let watchId = null;
 
 // ---------- Utilidades ----------
 function showLoader(msg) {
@@ -60,18 +79,12 @@ function setApiKey(key) { localStorage.setItem('ocrspace_key', key.trim()); }
 // ---------- Imagen: reducir peso ----------
 function canvasABlobLigero(canvas) {
   return new Promise(function(resolve) {
-    let calidad = 0.85;
     canvas.toBlob(function(blob) {
-      if (blob && blob.size <= 950000) {
-        resolve(blob);
-        return;
-      }
-      // Si es muy grande, bajar calidad
-      let q = calidad - 0.15;
+      if (blob && blob.size <= 950000) { resolve(blob); return; }
       canvas.toBlob(function(b2) {
         resolve(b2 || blob);
-      }, 'image/jpeg', q);
-    }, 'image/jpeg', calidad);
+      }, 'image/jpeg', 0.7);
+    }, 'image/jpeg', 0.85);
   });
 }
 
@@ -95,74 +108,51 @@ async function ocrSpaceReconocer(canvas, apiKey) {
 
   let resp, data;
   try {
-    resp = await fetch('https://api.ocr.space/parse/image', {
-      method: 'POST',
-      body: formData
-    });
+    resp = await fetch('https://api.ocr.space/parse/image', { method: 'POST', body: formData });
     debugInfo.push('📡 HTTP status: ' + resp.status);
   } catch (err) {
     debugInfo.push('❌ Error de red: ' + err.message);
-    const e = new Error(debugInfo.join('\n'));
-    e.detalleDebug = true;
-    throw e;
+    const e = new Error(debugInfo.join('\n')); e.detalleDebug = true; throw e;
   }
 
   try {
     data = await resp.json();
   } catch (err) {
     debugInfo.push('❌ Respuesta no es JSON');
-    const e = new Error(debugInfo.join('\n'));
-    e.detalleDebug = true;
-    throw e;
+    const e = new Error(debugInfo.join('\n')); e.detalleDebug = true; throw e;
   }
 
   debugInfo.push('OCRExitCode: ' + (data.OCRExitCode !== undefined ? data.OCRExitCode : 'N/A'));
   debugInfo.push('IsErroredOnProcessing: ' + data.IsErroredOnProcessing);
-  if (data.ErrorMessage) {
-    debugInfo.push('ErrorMessage: ' + JSON.stringify(data.ErrorMessage));
-  }
+  if (data.ErrorMessage) debugInfo.push('ErrorMessage: ' + JSON.stringify(data.ErrorMessage));
   debugInfo.push('');
 
   if (data.IsErroredOnProcessing) {
     debugInfo.push('❌ OCR.space reportó error.');
     debugInfo.push('Respuesta completa:');
     debugInfo.push(JSON.stringify(data, null, 2));
-    const e = new Error(debugInfo.join('\n'));
-    e.detalleDebug = true;
-    throw e;
+    const e = new Error(debugInfo.join('\n')); e.detalleDebug = true; throw e;
   }
 
   if (!data.ParsedResults || !data.ParsedResults.length) {
     debugInfo.push('❌ Sin ParsedResults.');
-    debugInfo.push('Respuesta completa:');
     debugInfo.push(JSON.stringify(data, null, 2));
-    const e = new Error(debugInfo.join('\n'));
-    e.detalleDebug = true;
-    throw e;
+    const e = new Error(debugInfo.join('\n')); e.detalleDebug = true; throw e;
   }
 
   const parsed = data.ParsedResults[0];
   debugInfo.push('📝 ParsedText length: ' + (parsed.ParsedText ? parsed.ParsedText.length : 0));
-  if (parsed.ErrorMessage) {
-    debugInfo.push('ErrorMessage parsing: ' + parsed.ErrorMessage);
-  }
   debugInfo.push('');
   debugInfo.push('=== TEXTO RECONOCIDO ===');
   debugInfo.push(parsed.ParsedText || '(vacío)');
 
   const resultado = parsed.ParsedText || '';
+  if (resultado && resultado.trim().length > 0) return resultado;
 
-  if (resultado && resultado.trim().length > 0) {
-    return resultado;
-  }
-
-  // Si no hay texto, lanzar error con debug
-  const e = new Error(debugInfo.join('\n'));
-  e.detalleDebug = true;
-  throw e;
+  const e = new Error(debugInfo.join('\n')); e.detalleDebug = true; throw e;
 }
 
-// ---------- Render ----------
+// ---------- Render lista ----------
 function renderPackages() {
   if (packages.length === 0) {
     packagesList.innerHTML = '<p class="empty">Aún no hay paquetes. Captura una etiqueta para comenzar.</p>';
@@ -192,7 +182,7 @@ function renderPackages() {
   btnOptimize.disabled = packages.length === 0;
 }
 
-// ---------- Botón capturar ----------
+// ---------- Captura ----------
 btnCapture.addEventListener('click', function() {
   if (!getApiKey()) {
     alert('Primero configura tu API key de OCR.space en Ajustes ⚙️');
@@ -209,68 +199,44 @@ cameraInput.addEventListener('change', function(e) {
     cropImage.src = ev.target.result;
     cropModal.hidden = false;
     rotacionActual = 0;
-    if (cropperInstance) {
-      cropperInstance.destroy();
-      cropperInstance = null;
-    }
+    if (cropperInstance) { cropperInstance.destroy(); cropperInstance = null; }
     setTimeout(function() {
       cropperInstance = new Cropper(cropImage, {
-        viewMode: 1,
-        aspectRatio: 2.5,
-        autoCropArea: 0.9,
-        movable: true,
-        zoomable: true,
-        rotatable: true,
-        scalable: false,
-        background: false,
-        responsive: true
+        viewMode: 1, aspectRatio: 2.5, autoCropArea: 0.9,
+        movable: true, zoomable: true, rotatable: true,
+        scalable: false, background: false, responsive: true
       });
     }, 100);
   };
   reader.readAsDataURL(file);
 });
 
-// ---------- Controles de recorte ----------
+// ---------- Controles recorte ----------
 btnRotate.addEventListener('click', function() {
   if (!cropperInstance) return;
   rotacionActual = (rotacionActual + 90) % 360;
   cropperInstance.rotate(rotacionActual);
 });
-btnWide.addEventListener('click', function() {
-  if (cropperInstance) cropperInstance.setAspectRatio(2.5);
-});
-btnSquare.addEventListener('click', function() {
-  if (cropperInstance) cropperInstance.setAspectRatio(1);
-});
-btnFree.addEventListener('click', function() {
-  if (cropperInstance) cropperInstance.setAspectRatio(NaN);
-});
+btnWide.addEventListener('click', function() { if (cropperInstance) cropperInstance.setAspectRatio(2.5); });
+btnSquare.addEventListener('click', function() { if (cropperInstance) cropperInstance.setAspectRatio(1); });
+btnFree.addEventListener('click', function() { if (cropperInstance) cropperInstance.setAspectRatio(NaN); });
 
 btnCancelCrop.addEventListener('click', function() {
-  if (cropperInstance) {
-    cropperInstance.destroy();
-    cropperInstance = null;
-  }
+  if (cropperInstance) { cropperInstance.destroy(); cropperInstance = null; }
   cropModal.hidden = true;
   cameraInput.value = '';
   rotacionActual = 0;
 });
 
-// ---------- Confirmar recorte → OCR ----------
+// ---------- Confirmar recorte ----------
 btnConfirmCrop.addEventListener('click', async function() {
   if (!cropperInstance) return;
 
   const canvasRecortado = cropperInstance.getCroppedCanvas({
-    maxWidth: 2000,
-    maxHeight: 2000,
-    imageSmoothingEnabled: true,
-    imageSmoothingQuality: 'high'
+    maxWidth: 2000, maxHeight: 2000,
+    imageSmoothingEnabled: true, imageSmoothingQuality: 'high'
   });
-
-  if (!canvasRecortado) {
-    alert('No se pudo recortar la imagen.');
-    return;
-  }
+  if (!canvasRecortado) { alert('No se pudo recortar la imagen.'); return; }
 
   labelPreview.src = canvasRecortado.toDataURL('image/jpeg', 0.9);
 
@@ -294,11 +260,7 @@ btnConfirmCrop.addEventListener('click', async function() {
     inputRecipient.value = detectarNombre(texto);
   } catch (err) {
     console.error('Error OCR:', err);
-    if (err.detalleDebug) {
-      ocrText.textContent = err.message;
-    } else {
-      ocrText.textContent = 'Error: ' + err.message;
-    }
+    ocrText.textContent = err.detalleDebug ? err.message : ('Error: ' + err.message);
     alert('OCR falló. Toca "Texto OCR completo" para ver detalles.');
   } finally {
     hideLoader();
@@ -306,7 +268,7 @@ btnConfirmCrop.addEventListener('click', async function() {
   }
 });
 
-// ---------- Correcciones de OCR ----------
+// ---------- Correcciones OCR ----------
 const CORRECCIONES_OCR = [
   [/\bMETEPECCP\b/gi, 'METEPEC, CP'],
   [/\b([A-ZÁÉÍÓÚÑ]{4,})CP\.?\s*(\d{5})/g, '$1, CP $2'],
@@ -325,11 +287,7 @@ function aplicarCorrecciones(texto) {
 
 // ---------- Heurísticas ----------
 function limpiarDireccion(s) {
-  return s
-    .replace(/\s+/g, ' ')
-    .replace(/\s*,\s*/g, ', ')
-    .replace(/[.,;]+$/, '')
-    .trim();
+  return s.replace(/\s+/g, ' ').replace(/\s*,\s*/g, ', ').replace(/[.,;]+$/, '').trim();
 }
 
 function detectarDireccion(texto) {
@@ -339,9 +297,7 @@ function detectarDireccion(texto) {
   const textoCompleto = lineas.join(' ');
 
   const matchDir = textoCompleto.match(/(?:direcci[oó]n\s*(?:completa)?[:\s]+)(.+)/i);
-  if (matchDir && matchDir[1].trim().length > 10) {
-    return limpiarDireccion(matchDir[1].trim());
-  }
+  if (matchDir && matchDir[1].trim().length > 10) return limpiarDireccion(matchDir[1].trim());
 
   const matchCP = textoCompleto.match(/\b(\d{5})\b/);
   let idxCP = -1;
@@ -359,12 +315,10 @@ function detectarDireccion(texto) {
 function detectarNombre(texto) {
   const lineas = texto.split('\n').map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 2; });
   if (lineas.length === 0) return '';
-
   for (let i = 0; i < lineas.length; i++) {
     const m = lineas[i].match(/(?:destinatario|nombre|para)[:\s]+(.+)/i);
     if (m && m[1].trim().length > 2) return m[1].trim();
   }
-
   const prohibidas = ['direcc', 'calle', 'colonia', 'envio', 'envío', 'guia', 'guía',
                       'paquete', 'remitente', 'cp', 'código', 'codigo', 'tel',
                       'teléfono', 'camino', 'av.', 'avenida', 'metepec', 'méxico',
@@ -372,7 +326,6 @@ function detectarNombre(texto) {
                       'forestal', 'dreams', 'lagoons', 'privada', 'framboyanes',
                       'totocuitlapilco', 'toluca', 'coacalco', 'tultitlán',
                       'higuera', 'boulevard', 'rosas', 'villa', 'flores'];
-
   for (let i = 0; i < Math.min(5, lineas.length); i++) {
     const l = lineas[i];
     const low = l.toLowerCase();
@@ -387,7 +340,7 @@ function detectarNombre(texto) {
   return '';
 }
 
-// ---------- Modal ajustes ----------
+// ---------- Ajustes ----------
 btnSettings.addEventListener('click', function() {
   inputApiKey.value = getApiKey();
   settingsModal.hidden = false;
@@ -406,10 +359,7 @@ btnCancelAddress.addEventListener('click', function() { addressModal.hidden = tr
 btnSaveAddress.addEventListener('click', function() {
   const recipient = inputRecipient.value.trim();
   const address   = inputAddress.value.trim();
-  if (!address) {
-    alert('Debes escribir una dirección.');
-    return;
-  }
+  if (!address) { alert('Debes escribir una dirección.'); return; }
   packages.push({
     recipient: recipient,
     address: address,
@@ -441,9 +391,7 @@ function extraerCiudad(direccion) {
   ];
   const ordenadas = ciudades.slice().sort(function(a, b) { return b.length - a.length; });
   for (let i = 0; i < ordenadas.length; i++) {
-    if (new RegExp('\\b' + ordenadas[i] + '\\b', 'i').test(direccion)) {
-      return ordenadas[i];
-    }
+    if (new RegExp('\\b' + ordenadas[i] + '\\b', 'i').test(direccion)) return ordenadas[i];
   }
   return '';
 }
@@ -467,14 +415,12 @@ async function geocodificarConNominatim(consulta) {
 async function geocodificarDireccion(direccion) {
   const cp = extraerCP(direccion);
   const ciudad = extraerCiudad(direccion);
-
   const variantes = [];
   if (cp) variantes.push(cp);
   if (cp && ciudad) variantes.push(cp + ', ' + ciudad + ', México');
   if (ciudad) variantes.push(ciudad + ', Estado de México, México');
 
   const intentos = [];
-
   for (let i = 0; i < variantes.length; i++) {
     const consulta = variantes[i];
     try {
@@ -486,13 +432,12 @@ async function geocodificarDireccion(direccion) {
     }
     await new Promise(function(res) { setTimeout(res, 1200); });
   }
-
-  const err = new Error('No se encontró la dirección.\n\nIntentos:\n' + intentos.join('\n'));
+  const err = new Error('No se encontró.\n' + intentos.join('\n'));
   err.intentos = intentos;
   throw err;
 }
 
-// ---------- Optimizar ruta ----------
+// ---------- Optimizar ruta → ir al mapa ----------
 btnOptimize.addEventListener('click', async function() {
   if (packages.length === 0) return;
   showLoader('Geocodificando direcciones…');
@@ -503,16 +448,12 @@ btnOptimize.addEventListener('click', async function() {
       const p = packages[i];
       if (p.coords) continue;
       loaderText.textContent = 'Geocodificando ' + (i + 1) + '/' + packages.length + '…';
-
       try {
         const resultado = await geocodificarDireccion(p.address);
         p.coords = { lat: resultado.lat, lon: resultado.lon };
         p.geocodedAs = resultado.display;
       } catch (err) {
-        errores.push({
-          address: p.address,
-          detalles: err.intentos || [err.message]
-        });
+        errores.push({ address: p.address, detalles: err.intentos || [err.message] });
       }
     }
 
@@ -521,35 +462,39 @@ btnOptimize.addEventListener('click', async function() {
 
     if (validos.length === 0) {
       hideLoader();
-      console.group('🔍 Diagnóstico de geocodificación');
-      errores.forEach(function(e) {
-        console.log('Dirección:', e.address);
-        e.detalles.forEach(function(d) { console.log('  ', d); });
-      });
-      console.groupEnd();
       alert('No se pudo geocodificar ninguna dirección.');
       return;
     }
 
-    const continuar = function(origen) {
-      ordenarPorVecinoMasCercano(origen, validos);
-      savePackages();
-      renderPackages();
-      hideLoader();
-      if (fallidos.length > 0) {
-        alert('Ruta optimizada con ' + validos.length + ' parada(s).\n\n⚠️ ' + fallidos.length + ' dirección(es) no se pudieron ubicar.');
-      } else {
-        alert('Ruta optimizada con ' + validos.length + ' parada(s). Lista para navegar.');
-      }
-    };
-
+    // Ordenar por cercanía
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
-        function(pos) { continuar({ lat: pos.coords.latitude, lon: pos.coords.longitude }); },
-        function() { continuar(validos[0].coords); }
+        function(pos) {
+          userLocation = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+          ordenarPorVecinoMasCercano(userLocation, validos);
+          savePackages();
+          hideLoader();
+          currentStopIndex = 0;
+          mostrarVistaMapa();
+          if (fallidos.length > 0) {
+            setTimeout(function() { alert('Ruta lista. ' + fallidos.length + ' dirección(es) omitidas.'); }, 500);
+          }
+        },
+        function() {
+          ordenarPorVecinoMasCercano(validos[0].coords, validos);
+          savePackages();
+          hideLoader();
+          currentStopIndex = 0;
+          mostrarVistaMapa();
+          setTimeout(function() { alert('Ruta lista (sin GPS). ' + fallidos.length + ' omitidas.'); }, 500);
+        }
       );
     } else {
-      continuar(validos[0].coords);
+      ordenarPorVecinoMasCercano(validos[0].coords, validos);
+      savePackages();
+      hideLoader();
+      currentStopIndex = 0;
+      mostrarVistaMapa();
     }
   } catch (err) {
     hideLoader();
@@ -557,13 +502,213 @@ btnOptimize.addEventListener('click', async function() {
   }
 });
 
+// ---------- Vista de mapa ----------
+function mostrarVistaMapa() {
+  viewHome.hidden = true;
+  viewMap.hidden = false;
+
+  // Si ya hay mapa, solo invalidar tamaño
+  if (mapInstance) {
+    setTimeout(function() {
+      mapInstance.invalidateSize();
+      redibujarRuta();
+    }, 150);
+  } else {
+    setTimeout(inicializarMapa, 150);
+  }
+
+  // Iniciar seguimiento GPS
+  if (navigator.geolocation && !watchId) {
+    watchId = navigator.geolocation.watchPosition(
+      function(pos) {
+        userLocation = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+        if (mapInstance) redibujarRuta();
+      },
+      function() { /* sin GPS */ },
+      { enableHighAccuracy: true, maximumAge: 10000, timeout: 15000 }
+    );
+  }
+}
+
+function inicializarMapa() {
+  mapInstance = L.map('map').setView([19.4, -99.1], 12);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap',
+    maxZoom: 19
+  }).addTo(mapInstance);
+  redibujarRuta();
+}
+
+function redibujarRuta() {
+  if (!mapInstance) return;
+
+  // Limpiar
+  mapMarkers.forEach(function(m) { mapInstance.removeLayer(m); });
+  mapMarkers = [];
+  if (mapRouteLine) { mapInstance.removeLayer(mapRouteLine); mapRouteLine = null; }
+
+  const coords = [];
+
+  // Marcador de usuario
+  if (userLocation) {
+    const userIcon = L.divIcon({
+      className: 'user-marker',
+      html: '🔵',
+      iconSize: [20, 20],
+      iconAnchor: [10, 10]
+    });
+    const userMarker = L.marker([userLocation.lat, userLocation.lon], { icon: userIcon })
+      .bindPopup('📍 Tu ubicación actual');
+    userMarker.addTo(mapInstance);
+    mapMarkers.push(userMarker);
+    coords.push([userLocation.lat, userLocation.lon]);
+  }
+
+  // Marcadores de paradas
+  const validos = packages.filter(function(p) { return p.coords; });
+  validos.forEach(function(p, i) {
+    const icono = L.divIcon({
+      className: 'stop-marker',
+      html: '<div class="stop-pin"><span>' + (i + 1) + '</span></div>',
+      iconSize: [30, 30],
+      iconAnchor: [15, 30]
+    });
+    const marker = L.marker([p.coords.lat, p.coords.lon], { icon: icono })
+      .bindPopup('<strong>' + (i + 1) + '. ' + (p.recipient || 'Sin nombre') + '</strong><br>' + p.address);
+    marker.addTo(mapInstance);
+    mapMarkers.push(marker);
+    coords.push([p.coords.lat, p.coords.lon]);
+  });
+
+  // Línea de ruta
+  if (coords.length > 1) {
+    mapRouteLine = L.polyline(coords, {
+      color: '#22c55e', weight: 4, dashArray: '8, 8', opacity: 0.8
+    }).addTo(mapInstance);
+    mapInstance.fitBounds(mapRouteLine.getBounds(), { padding: [60, 60] });
+  } else if (coords.length === 1) {
+    mapInstance.setView(coords[0], 15);
+  }
+
+  actualizarPanelNavegacion();
+}
+
+function actualizarPanelNavegacion() {
+  const validos = packages.filter(function(p) { return p.coords; });
+  if (validos.length === 0) return;
+
+  const actual = validos[currentStopIndex];
+  if (!actual) {
+    navCurrentStop.textContent = '✓ Completado';
+    navInstruction.textContent = '🎉 Todas las paradas completadas';
+    navDistance.textContent = '—';
+    navEta.textContent = '—';
+    return;
+  }
+
+  navCurrentStop.textContent = 'Parada ' + (currentStopIndex + 1) + ' de ' + validos.length;
+  navInstruction.innerHTML =
+    '<strong>' + (actual.recipient || 'Sin nombre') + '</strong><br>' +
+    '<small>' + actual.address + '</small>';
+
+  if (userLocation) {
+    const dist = distancia(userLocation, actual.coords);
+    navDistance.textContent = '📏 ' + dist.toFixed(1) + ' km';
+    const min = Math.round((dist / 30) * 60);
+    navEta.textContent = '⏱️ ~' + min + ' min';
+  } else {
+    navDistance.textContent = '📏 —';
+    navEta.textContent = '⏱️ —';
+  }
+}
+
+// ---------- Botones de navegación ----------
+btnExitNav.addEventListener('click', function() {
+  if (watchId) {
+    navigator.geolocation.clearWatch(watchId);
+    watchId = null;
+  }
+  viewMap.hidden = true;
+  viewHome.hidden = false;
+});
+
+btnRepeat.addEventListener('click', function() {
+  const validos = packages.filter(function(p) { return p.coords; });
+  const actual = validos[currentStopIndex];
+  if (!actual) return;
+
+  if (!('speechSynthesis' in window)) {
+    alert('Tu navegador no soporta voz.');
+    return;
+  }
+
+  let texto = 'Parada ' + (currentStopIndex + 1) + ' de ' + validos.length + '. ';
+  if (actual.recipient) texto += 'Para ' + actual.recipient + '. ';
+  texto += actual.address + '.';
+  if (userLocation) {
+    const dist = distancia(userLocation, actual.coords);
+    texto += ' Está a ' + dist.toFixed(1) + ' kilómetros.';
+  }
+
+  const utt = new SpeechSynthesisUtterance(texto);
+  utt.lang = 'es-MX';
+  utt.rate = 0.95;
+  speechSynthesis.cancel();
+  speechSynthesis.speak(utt);
+});
+
+btnOpenMaps.addEventListener('click', function() {
+  const validos = packages.filter(function(p) { return p.coords; });
+  const actual = validos[currentStopIndex];
+  if (!actual) return;
+  const url = 'https://www.google.com/maps/dir/?api=1&destination=' +
+              actual.coords.lat + ',' + actual.coords.lon + '&travelmode=driving';
+  window.open(url, '_blank');
+});
+
+btnNext.addEventListener('click', function() {
+  const validos = packages.filter(function(p) { return p.coords; });
+  const actual = validos[currentStopIndex];
+  if (!actual) return;
+
+  if (!confirm('¿Marcar como entregado?\n\n' + (actual.recipient || 'Sin nombre') + '\n' + actual.address)) return;
+
+  // Eliminar del array
+  actual.delivered = true;
+  const idx = packages.indexOf(actual);
+  if (idx > -1) packages.splice(idx, 1);
+  savePackages();
+
+  // Si ya no hay más, salir
+  const restantes = packages.filter(function(p) { return p.coords; });
+  if (restantes.length === 0) {
+    redibujarRuta();
+    alert('🎉 ¡Todas las paradas completadas!');
+    setTimeout(function() {
+      if (watchId) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+      viewMap.hidden = true;
+      viewHome.hidden = false;
+      renderPackages();
+    }, 1500);
+    return;
+  }
+
+  // El siguiente paquete quedó en la misma posición del índice
+  if (currentStopIndex >= restantes.length) {
+    currentStopIndex = restantes.length - 1;
+  }
+
+  redibujarRuta();
+  renderPackages();
+});
+
+// ---------- Ordenamiento por cercanía ----------
 function ordenarPorVecinoMasCercano(inicio, lista) {
   const restantes = lista.slice();
   const orden = [];
   let actual = inicio;
   while (restantes.length > 0) {
-    let mejorIdx = 0;
-    let mejorDist = Infinity;
+    let mejorIdx = 0, mejorDist = Infinity;
     for (let i = 0; i < restantes.length; i++) {
       const d = distancia(actual, restantes[i].coords);
       if (d < mejorDist) { mejorDist = d; mejorIdx = i; }
@@ -575,10 +720,7 @@ function ordenarPorVecinoMasCercano(inicio, lista) {
   const nuevos = [];
   for (let i = 0; i < orden.length; i++) {
     const idx = packages.indexOf(orden[i]);
-    if (idx > -1) {
-      nuevos.push(orden[i]);
-      packages.splice(idx, 1);
-    }
+    if (idx > -1) { nuevos.push(orden[i]); packages.splice(idx, 1); }
   }
   packages = nuevos.concat(packages);
 }
@@ -598,4 +740,4 @@ document.addEventListener('DOMContentLoaded', function() {
   renderPackages();
 });
 
-console.log('app-v18 cargado correctamente');
+console.log('app v19 cargado');
