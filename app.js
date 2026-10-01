@@ -1,10 +1,11 @@
 // ============================================
-//  Enrutador PWA — Lógica principal (v26)
-//  + Formato Google México: "Calle Num, Colonia, CP Municipio, Méx"
+//  Enrutador PWA — Lógica principal (v28)
+//  + Formato Google México desde la captura
+//  + Fix: normalizar saltos de línea
 //  + Vista previa de mapa
 // ============================================
 
-const MI_VERSION = 'v27-2026-10-01';
+const MI_VERSION = 'v28-2026-10-01';
 
 // ---------- DOM ----------
 const btnCapture   = document.getElementById('btnCapture');
@@ -125,14 +126,11 @@ function extraerCP(texto) {
 // ---------- TITLE CASE con artículos en minúscula ----------
 function titleCaseMx(s) {
   const minusculas = ['de', 'del', 'la', 'las', 'los', 'y', 'o', 'el', 'en', 'a', 'con', 'por', 'para', 'al'];
-  return s.split(' ').map(function(w, i) {
+  return s.split(/\s+/).map(function(w, i) {
     if (w.length === 0) return w;
     const low = w.toLowerCase();
-    // Artículos/preposiciones en medio → minúscula
     if (i > 0 && minusculas.indexOf(low) !== -1) return low;
-    // Siglas cortas ya en mayúsculas (MZ, LT) se conservan
     if (w.length <= 2 && w === w.toUpperCase()) return w.toUpperCase();
-    // Todo mayúsculas → Capitalizar normal
     if (w === w.toUpperCase() && w.length > 2) {
       return w.charAt(0) + w.slice(1).toLowerCase();
     }
@@ -143,79 +141,83 @@ function titleCaseMx(s) {
 // ---------- Formatear dirección ESTILO MÉXICO ----------
 // Formato: "Calle Num, Colonia, CP Municipio, Méx"
 function formatearParaGoogle(direccion) {
-  // 1. Extraer CP
-  const cp = extraerCP(direccion);
+  if (!direccion || !direccion.trim()) return '';
 
-  // 2. Limpiar ruido
-  let limpia = direccion
-    .replace(/direcci[oó]n\s*(completa)?[:\s]*/gi, '')
-    .replace(/([A-ZÁÉÍÓÚÑ]{3,})CP\.?\s*\d{5}/gi, '$1')
-    .replace(/\bCP\.?\s*\d{5}/gi, '')
-    .replace(/\b\d{5}\b/g, '')
-    .replace(/estado\s+de\s+m[eé]xico/gi, '')
-    .replace(/\bm[eé]xico\b/gi, '')
-    .replace(/\s*,\s*/g, ', ')
-    .replace(/\s{2,}/g, ' ')
-    .replace(/,\s*,/g, ',')
-    .replace(/^\s*,/, '')
-    .replace(/,\s*$/, '')
-    .trim();
+  // ⭐ 1. CRÍTICO: Normalizar TODOS los espacios (incluye \n, \t) a espacio simple
+  let d = direccion.replace(/\s+/g, ' ').trim();
 
-  let partes = limpia.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
-  if (partes.length === 0) return (direccion + ', Méx').trim();
+  // 2. Quitar "Direccion completa:" o "Dirección completa:"
+  d = d.replace(/direcci[oó]n\s*(completa)?\s*:?\s*/i, '');
 
-  // 3. Calle = partes[0]
-  let calle = partes[0];
+  // 3. Extraer CP (5 dígitos)
+  const cpMatch = d.match(/\b(\d{5})\b/);
+  const cp = cpMatch ? cpMatch[1] : '';
 
-  // 4. Buscar primera parte numérica = número de casa
-  let numero = '';
-  let idxNumero = -1;
+  // 4. Normalizar "BERRIOZABALCP.55710" → "BERRIOZABAL"
+  d = d.replace(/([A-ZÁÉÍÓÚÑ]{3,})\s*CP\.?\s*\d{5}\b/gi, '$1');
+
+  // 5. Quitar "CP 55710" o "CP.55710"
+  d = d.replace(/\bCP\.?\s*\d{5}\b/gi, '');
+
+  // 6. Quitar el CP suelto (5 dígitos solos)
+  d = d.replace(/\b\d{5}\b/g, '');
+
+  // 7. Quitar "mexico" y "estado de méxico"
+  d = d.replace(/estado\s+de\s+m[eé]xico/gi, '');
+  d = d.replace(/\bm[eé]xico\b/gi, '');
+
+  // 8. Limpiar comas y espacios repetidos
+  d = d.replace(/\s*,\s*/g, ', ')
+       .replace(/,+/g, ',')
+       .replace(/^\s*,\s*/, '')
+       .replace(/\s*,\s*$/, '')
+       .replace(/\s+/g, ' ')
+       .trim();
+
+  // 9. Split por comas
+  let partes = d.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
+  if (partes.length === 0) return direccion.trim();
+
+  // 10. Encontrar el número de casa (parte que sea solo dígitos)
+  let idxNum = -1;
   for (let i = 1; i < partes.length; i++) {
-    if (/^\d+[A-Za-z]?$/.test(partes[i])) {
-      numero = partes[i];
-      idxNumero = i;
-      break;
+    if (/^\d+[A-Za-z]?$/.test(partes[i])) { idxNum = i; break; }
+  }
+
+  // 11. Construir resultado
+  let resultado = [];
+
+  if (idxNum > 0) {
+    let calle = partes.slice(0, idxNum).join(' ');
+    let numero = partes[idxNum];
+
+    // Abreviar tipos de vía
+    calle = calle.replace(/\bBoulevard\b/gi, 'Blvd.')
+                 .replace(/\bBulevar\b/gi, 'Blvd.')
+                 .replace(/\bAvenida\b/gi, 'Av.')
+                 .replace(/\bProlongaci[oó]n\b/gi, 'Prol.')
+                 .replace(/\bCalzada\b/gi, 'Calz.')
+                 .replace(/\bCarretera\b/gi, 'Carret.');
+
+    calle = titleCaseMx(calle);
+    resultado.push(calle + ' ' + numero);
+
+    let resto = partes.slice(idxNum + 1);
+    if (resto.length > 0) resultado.push(titleCaseMx(resto[0]));
+
+    if (resto.length > 1) {
+      let mun = titleCaseMx(resto.slice(1).join(' '));
+      resultado.push(cp ? (cp + ' ' + mun) : mun);
+    } else if (cp) {
+      resultado.push(cp);
     }
+  } else {
+    partes.forEach(function(p) { resultado.push(titleCaseMx(p)); });
+    if (cp && resultado.indexOf(cp) === -1) resultado.push(cp);
   }
 
-  // 5. Colonia = siguiente parte después del número
-  let colonia = '';
-  let municipio = '';
-  if (idxNumero > -1) {
-    colonia = partes[idxNumero + 1] || '';
-    municipio = partes[idxNumero + 2] || '';
-  }
-
-  // Si no hay colonia pero hay partes, intentar tomar la siguiente
-  if (!colonia && partes.length > 1) colonia = partes[1] || '';
-  if (!municipio && partes.length > 2) municipio = partes[2] || '';
-
-  // 6. Abreviar tipos de vía
-  calle = calle
-    .replace(/\bBoulevard\b/gi, 'Blvd.')
-    .replace(/\bBulevar\b/gi, 'Blvd.')
-    .replace(/\bAvenida\b/gi, 'Av.')
-    .replace(/\bProlongaci[oó]n\b/gi, 'Prol.')
-    .replace(/\bCalzada\b/gi, 'Calz.')
-    .replace(/\bCarretera\b/gi, 'Carret.');
-
-  // 7. Title Case
-  calle = titleCaseMx(calle);
-  colonia = titleCaseMx(colonia);
-  municipio = titleCaseMx(municipio);
-
-  // 8. Armar: "Calle Num, Colonia, CP Municipio, Méx"
-  const partesFinales = [];
-  partesFinales.push(calle + (numero ? ' ' + numero : ''));
-  if (colonia) partesFinales.push(colonia);
-
-  let cpMun = cp;
-  if (municipio) cpMun = (cpMun ? cpMun + ' ' : '') + municipio;
-  if (cpMun.trim()) partesFinales.push(cpMun.trim());
-
-  partesFinales.push('Méx');
-
-  return partesFinales.join(', ');
+  resultado.push('Méx');
+  return resultado.join(', ');
 }
 
 // ---------- Render lista ----------
@@ -419,6 +421,7 @@ btnConfirmCrop.addEventListener('click', async function() {
     const texto = await ocrSpaceReconocer(canvasRecortado, getApiKey());
     ocrResultText = texto;
     ocrText.textContent = texto;
+    // ⭐ Formatear directo al estilo Google desde la captura
     inputAddress.value   = formatearParaGoogle(detectarDireccion(texto));
     inputRecipient.value = detectarNombre(texto);
   } catch (err) {
@@ -432,28 +435,8 @@ btnConfirmCrop.addEventListener('click', async function() {
 });
 
 // ---------- Correcciones OCR ----------
-const CORRECCIONES_OCR = [
-  [/\b([A-ZÁÉÍÓÚÑ]{4,})CP\.?\s*(\d{5})/g, '$1, CP $2'],
-  [/\bCP\.?\s*(\d{5})/gi, 'CP $1']
-];
-function aplicarCorrecciones(texto) {
-  let t = texto;
-  for (let i = 0; i < CORRECCIONES_OCR.length; i++) {
-    t = t.replace(CORRECCIONES_OCR[i][0], CORRECCIONES_OCR[i][1]);
-  }
-  return t;
-}
-
-function limpiarDireccion(s) {
-  return s.replace(/direcci[oó]n\s*(completa)?[:\s]*/gi, '')
-          .replace(/\s+/g, ' ')
-          .replace(/\s*,\s*/g, ', ')
-          .replace(/[.,;]+$/, '')
-          .trim();
-}
-
 function detectarDireccion(texto) {
-  let t = aplicarCorrecciones(texto).replace(/[""«»]/g, '"').replace(/[|]/g, 'I');
+  let t = texto.replace(/[""«»]/g, '"').replace(/[|]/g, 'I');
   const lineas = t.split('\n').map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 1; });
   if (lineas.length === 0) return '';
   const stopWords = ['obs:', 'obs :', 'observaciones:', 'remitente:', 'destinatario:',
@@ -479,7 +462,7 @@ function detectarDireccion(texto) {
       if (esStop) break;
       if (lineas[i].length > 1) resultado.push(lineas[i]);
     }
-    if (resultado.length > 0) return limpiarDireccion(resultado.join(', '));
+    if (resultado.length > 0) return resultado.join(' ');
   }
   const textoCompleto = lineas.join(' ');
   const matchCP = textoCompleto.match(/\b(\d{5})\b/);
@@ -488,9 +471,9 @@ function detectarDireccion(texto) {
   if (idxCP > -1) {
     const inicio = Math.max(0, idxCP - 4);
     const fin = Math.min(lineas.length, idxCP + 2);
-    return limpiarDireccion(lineas.slice(inicio, fin).join(', '));
+    return lineas.slice(inicio, fin).join(' ');
   }
-  return limpiarDireccion(lineas.slice(0, 6).join(', '));
+  return lineas.slice(0, 6).join(' ');
 }
 
 function detectarNombre(texto) {
@@ -817,4 +800,4 @@ function distancia(a, b) {
 }
 
 document.addEventListener('DOMContentLoaded', function() { renderPackages(); });
-console.log('app v26 cargado');
+console.log('app v28 cargado');
