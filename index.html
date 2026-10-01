@@ -33,6 +33,28 @@
   </script>
 </head>
 <body>
+    <!-- 📺 Panel de errores visible -->
+  <div id="errorPanel" style="display:none;position:fixed;top:0;left:0;right:0;background:#7f1d1d;color:#fff;padding:12px;z-index:99999;font-family:monospace;font-size:12px;max-height:60vh;overflow:auto;white-space:pre-wrap;"></div>
+  <script>
+    window.addEventListener('error', function(e) {
+      var p = document.getElementById('errorPanel');
+      p.style.display = 'block';
+      p.textContent += '❌ ' + (e.message || e.error) + '\n   en ' + (e.filename || '?') + ':' + e.lineno + '\n\n';
+    });
+    window.addEventListener('unhandledrejection', function(e) {
+      var p = document.getElementById('errorPanel');
+      p.style.display = 'block';
+      p.textContent += '❌ Promesa rechazada: ' + (e.reason && e.reason.message ? e.reason.message : e.reason) + '\n\n';
+    });
+    setTimeout(function() {
+      var p = document.getElementById('errorPanel');
+      if (p.style.display === 'none') {
+        p.style.display = 'block';
+        p.style.background = '#14532d';
+        p.textContent = '✅ JS cargó sin errores. Si el botón no responde, el problema es otro.';
+      }
+    }, 2000);
+  </script>
   <header class="app-header">
     <h1>Enrutador <small id="versionTag" style="font-size:0.7rem;color:#22c55e;">v17</small></h1>
     <button id="btnSettings" class="icon-btn" title="Ajustes">⚙️</button>
