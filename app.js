@@ -362,66 +362,67 @@ function extraerCiudad(direccion) {
   return '';
 }
 
-async function geocodificarConNominatim(consulta) {
-  const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=mx&q=${encodeURIComponent(consulta)}`;
-  const r = await fetch(url, { headers: { 'Accept-Language': 'es' } });
-  const data = await r.json();
-  if (data && data[0]) {
-    return {
-      lat: parseFloat(data[0].lat),
-      lon: parseFloat(data[0].lon),
-      display: data[0].display_name,
-      query: consulta
-    };
-  }
-  return null;
-}
-
 async function geocodificarDireccion(direccion) {
   const limpia = limpiarParaGeocodificar(direccion);
   const cp = extraerCP(direccion);
-  const ciudad = extraerCiudad(direccion);
+  const ciudad = extraerCiudad(direccion) || 'Metepec'; // Metepec por defecto para tu zona
 
-  // Variantes en cascada (de más específica a menos)
+  // Variantes reordenadas: CP PRIMERO (porque ya probamos que funciona)
   const variantes = [
-    `${limpia}, Estado de México, México`,                    // 1. Dirección completa
-    `${limpia}, México`,                                       // 2. Dirección completa sin estado
-    cp ? `${cp}, ${ciudad || 'Metepec'}, Estado de México, México` : null, // 3. Solo CP
-    ciudad ? `${ciudad}, Estado de México, México` : null,     // 4. Solo ciudad
-    'Metepec, Estado de México, México'                        // 5. Fallback: centro de Metepec
+    cp ? `${cp}, ${ciudad}, Estado de México, México` : null,  // 1. Solo CP + ciudad ⭐
+    cp ? `${cp}, México` : null,                                // 2. Solo CP
+    `${limpia}, ${ciudad}, Estado de México, México`,           // 3. Dirección + ciudad + estado
+    `${limpia}, México`,                                         // 4. Dirección + México
+    `${ciudad}, Estado de México, México`                        // 5. Solo ciudad
   ].filter(Boolean);
 
+  const intentos = [];   // para diagnóstico
+
   for (let i = 0; i < variantes.length; i++) {
+    const consulta = variantes[i];
     try {
-      const resultado = await geocodificarConNominatim(variantes[i]);
+      const resultado = await geocodificarConNominatim(consulta);
       if (resultado) {
-        console.log(`✅ Geocodificado con variante ${i + 1}:`, variantes[i]);
+        console.log(`✅ Variante ${i + 1} OK:`, consulta);
         console.log(`   → ${resultado.display}`);
         return resultado;
+      } else {
+        intentos.push(`❌ "${consulta}" → sin resultados`);
       }
     } catch (err) {
-      console.warn(`Error con variante ${i + 1}:`, err);
+      intentos.push(`⚠️ "${consulta}" → ${err.message}`);
     }
     // Respetar el rate limit de Nominatim (1 req/seg)
     await new Promise(res => setTimeout(res, 1200));
   }
-  return null;
+
+  // Si TODO falló, lanzar error con detalles
+  const err = new Error('Nominatim no encontró la dirección.\n\nIntentos:\n' + intentos.join('\n'));
+  err.intentos = intentos;
+  throw err;
 }
 
 // ---------- Optimizar ruta ----------
 btnOptimize.addEventListener('click', async () => {
   if (packages.length === 0) return;
   showLoader('Geocodificando direcciones…');
+  const errores = [];
+
   try {
     for (let i = 0; i < packages.length; i++) {
       const p = packages[i];
       if (p.coords) continue;
       loaderText.textContent = `Geocodificando ${i + 1}/${packages.length}…`;
 
-      const resultado = await geocodificarDireccion(p.address);
-      if (resultado) {
+      try {
+        const resultado = await geocodificarDireccion(p.address);
         p.coords = { lat: resultado.lat, lon: resultado.lon };
-        p.geocodedAs = resultado.display;   // guardar cómo lo encontró, útil para depurar
+        p.geocodedAs = resultado.display;
+      } catch (err) {
+        errores.push({
+          address: p.address,
+          detalles: err.intentos || [err.message]
+        });
       }
     }
 
@@ -430,12 +431,15 @@ btnOptimize.addEventListener('click', async () => {
 
     if (validos.length === 0) {
       hideLoader();
-      alert('No se pudo geocodificar ninguna dirección. Revisa que la dirección tenga calle, número y ciudad.');
+      // Mostrar detalle de los intentos en la consola
+      console.group('🔍 Diagnóstico de geocodificación');
+      errores.forEach(e => {
+        console.log('Dirección:', e.address);
+        e.detalles.forEach(d => console.log('  ', d));
+      });
+      console.groupEnd();
+      alert('No se pudo geocodificar ninguna dirección.\n\nAbre la consola (F12 o menú → Más herramientas → Consola) para ver los intentos.');
       return;
-    }
-
-    if (fallidos.length > 0) {
-      console.warn('Direcciones no geocodificadas:', fallidos.map(f => f.address));
     }
 
     const continuar = (origen) => {
@@ -444,7 +448,7 @@ btnOptimize.addEventListener('click', async () => {
       renderPackages();
       hideLoader();
       if (fallidos.length > 0) {
-        alert(`Ruta optimizada con ${validos.length} parada(s).\n\n⚠️ ${fallidos.length} dirección(es) no se pudieron ubicar y se omitieron del recorrido.`);
+        alert(`Ruta optimizada con ${validos.length} parada(s).\n\n⚠️ ${fallidos.length} dirección(es) no se pudieron ubicar y se omitieron.`);
       } else {
         alert(`Ruta optimizada con ${validos.length} parada(s). Lista para navegar.`);
       }
