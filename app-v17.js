@@ -1,9 +1,10 @@
 // ============================================
-//  Enrutador PWA — Lógica principal (v25)
-//  + Vista previa de mapa al tocar un paquete
+//  Enrutador PWA — Lógica principal (v26)
+//  + Formato Google México: "Calle Num, Colonia, CP Municipio, Méx"
+//  + Vista previa de mapa
 // ============================================
 
-const MI_VERSION = 'v25-2026-10-01';
+const MI_VERSION = 'v26-2026-10-01';
 
 // ---------- DOM ----------
 const btnCapture   = document.getElementById('btnCapture');
@@ -11,51 +12,44 @@ const btnOptimize  = document.getElementById('btnOptimize');
 const btnSettings  = document.getElementById('btnSettings');
 const cameraInput  = document.getElementById('cameraInput');
 const packagesList = document.getElementById('packagesList');
-
 const viewHome = document.getElementById('viewHome');
 const viewMap  = document.getElementById('viewMap');
 const btnExitNav = document.getElementById('btnExitNav');
-
-const cropModal      = document.getElementById('cropModal');
-const cropImage      = document.getElementById('cropImage');
-const btnCancelCrop  = document.getElementById('btnCancelCrop');
+const cropModal = document.getElementById('cropModal');
+const cropImage = document.getElementById('cropImage');
+const btnCancelCrop = document.getElementById('btnCancelCrop');
 const btnConfirmCrop = document.getElementById('btnConfirmCrop');
-const btnRotate      = document.getElementById('btnRotate');
-const btnWide        = document.getElementById('btnWide');
-const btnSquare      = document.getElementById('btnSquare');
-const btnFree        = document.getElementById('btnFree');
-
-const addressModal    = document.getElementById('addressModal');
-const labelPreview    = document.getElementById('labelPreview');
-const inputRecipient  = document.getElementById('inputRecipient');
-const inputAddress    = document.getElementById('inputAddress');
-const ocrText         = document.getElementById('ocrText');
+const btnRotate = document.getElementById('btnRotate');
+const btnWide = document.getElementById('btnWide');
+const btnSquare = document.getElementById('btnSquare');
+const btnFree = document.getElementById('btnFree');
+const addressModal = document.getElementById('addressModal');
+const labelPreview = document.getElementById('labelPreview');
+const inputRecipient = document.getElementById('inputRecipient');
+const inputAddress = document.getElementById('inputAddress');
+const ocrText = document.getElementById('ocrText');
 const btnCancelAddress = document.getElementById('btnCancelAddress');
-const btnSaveAddress   = document.getElementById('btnSaveAddress');
-
-const settingsModal      = document.getElementById('settingsModal');
-const inputApiKey        = document.getElementById('inputApiKey');
-const btnCancelSettings  = document.getElementById('btnCancelSettings');
-const btnSaveSettings    = document.getElementById('btnSaveSettings');
-
-const previewModal    = document.getElementById('previewModal');
-const previewTitle    = document.getElementById('previewTitle');
-const previewMap      = document.getElementById('previewMap');
-const previewAddress  = document.getElementById('previewAddress');
+const btnSaveAddress = document.getElementById('btnSaveAddress');
+const settingsModal = document.getElementById('settingsModal');
+const inputApiKey = document.getElementById('inputApiKey');
+const btnCancelSettings = document.getElementById('btnCancelSettings');
+const btnSaveSettings = document.getElementById('btnSaveSettings');
+const previewModal = document.getElementById('previewModal');
+const previewTitle = document.getElementById('previewTitle');
+const previewMap = document.getElementById('previewMap');
+const previewAddress = document.getElementById('previewAddress');
 const btnClosePreview = document.getElementById('btnClosePreview');
-const btnPreviewMaps  = document.getElementById('btnPreviewMaps');
-
-const loader     = document.getElementById('loader');
+const btnPreviewMaps = document.getElementById('btnPreviewMaps');
+const loader = document.getElementById('loader');
 const loaderText = document.getElementById('loaderText');
-
 const navCurrentStop = document.getElementById('navCurrentStop');
 const navInstruction = document.getElementById('navInstruction');
-const navDistance    = document.getElementById('navDistance');
-const navEta         = document.getElementById('navEta');
-const btnRepeat      = document.getElementById('btnRepeat');
-const btnCopy        = document.getElementById('btnCopy');
-const btnOpenMaps    = document.getElementById('btnOpenMaps');
-const btnNext        = document.getElementById('btnNext');
+const navDistance = document.getElementById('navDistance');
+const navEta = document.getElementById('navEta');
+const btnRepeat = document.getElementById('btnRepeat');
+const btnCopy = document.getElementById('btnCopy');
+const btnOpenMaps = document.getElementById('btnOpenMaps');
+const btnNext = document.getElementById('btnNext');
 
 const versionTag = document.getElementById('versionTag');
 if (versionTag) versionTag.textContent = MI_VERSION;
@@ -66,14 +60,12 @@ let ocrResultText = '';
 let cropperInstance = null;
 let rotacionActual = 0;
 let ordenManual = false;
-
 let mapInstance = null;
 let mapMarkers = [];
 let mapRouteLine = null;
 let currentStopIndex = 0;
 let userLocation = null;
 let watchId = null;
-
 let previewMapInstance = null;
 let previewMapMarker = null;
 let previewPackageIndex = -1;
@@ -85,7 +77,6 @@ function savePackages() { localStorage.setItem('packages', JSON.stringify(packag
 function getApiKey() { return localStorage.getItem('ocrspace_key') || ''; }
 function setApiKey(key) { localStorage.setItem('ocrspace_key', key.trim()); }
 
-// ---------- Reducir imagen ----------
 function canvasABlobLigero(canvas) {
   return new Promise(function(resolve) {
     canvas.toBlob(function(blob) {
@@ -95,7 +86,6 @@ function canvasABlobLigero(canvas) {
   });
 }
 
-// ---------- OCR.space ----------
 async function ocrSpaceReconocer(canvas, apiKey) {
   const blob = await canvasABlobLigero(canvas);
   const formData = new FormData();
@@ -116,7 +106,6 @@ async function ocrSpaceReconocer(canvas, apiKey) {
   try { data = await resp.json(); } catch (err) {
     const e = new Error('Respuesta no es JSON. HTTP ' + resp.status); e.detalleDebug = true; throw e;
   }
-
   if (data.IsErroredOnProcessing) {
     const msg = data.ErrorMessage ? (Array.isArray(data.ErrorMessage) ? data.ErrorMessage.join(' | ') : data.ErrorMessage) : 'Error';
     const e = new Error('OCR.space error: ' + msg); e.detalleDebug = true; throw e;
@@ -124,19 +113,41 @@ async function ocrSpaceReconocer(canvas, apiKey) {
   if (!data.ParsedResults || !data.ParsedResults.length) {
     const e = new Error('Sin resultados.'); e.detalleDebug = true; throw e;
   }
-  const parsed = data.ParsedResults[0];
-  return parsed.ParsedText || '';
+  return data.ParsedResults[0].ParsedText || '';
 }
 
-// ---------- Formatear dirección ----------
+// ---------- Extraer CP ----------
 function extraerCP(texto) {
   const m = texto.match(/\b(\d{5})\b/);
   return m ? m[1] : '';
 }
 
+// ---------- TITLE CASE con artículos en minúscula ----------
+function titleCaseMx(s) {
+  const minusculas = ['de', 'del', 'la', 'las', 'los', 'y', 'o', 'el', 'en', 'a', 'con', 'por', 'para', 'al'];
+  return s.split(' ').map(function(w, i) {
+    if (w.length === 0) return w;
+    const low = w.toLowerCase();
+    // Artículos/preposiciones en medio → minúscula
+    if (i > 0 && minusculas.indexOf(low) !== -1) return low;
+    // Siglas cortas ya en mayúsculas (MZ, LT) se conservan
+    if (w.length <= 2 && w === w.toUpperCase()) return w.toUpperCase();
+    // Todo mayúsculas → Capitalizar normal
+    if (w === w.toUpperCase() && w.length > 2) {
+      return w.charAt(0) + w.slice(1).toLowerCase();
+    }
+    return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+  }).join(' ');
+}
+
+// ---------- Formatear dirección ESTILO MÉXICO ----------
+// Formato: "Calle Num, Colonia, CP Municipio, Méx"
 function formatearParaGoogle(direccion) {
+  // 1. Extraer CP
   const cp = extraerCP(direccion);
-  let d = direccion
+
+  // 2. Limpiar ruido
+  let limpia = direccion
     .replace(/direcci[oó]n\s*(completa)?[:\s]*/gi, '')
     .replace(/([A-ZÁÉÍÓÚÑ]{3,})CP\.?\s*\d{5}/gi, '$1')
     .replace(/\bCP\.?\s*\d{5}/gi, '')
@@ -150,44 +161,75 @@ function formatearParaGoogle(direccion) {
     .replace(/,\s*$/, '')
     .trim();
 
-  let partes = d.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
+  let partes = limpia.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
+  if (partes.length === 0) return (direccion + ', Méx').trim();
 
-  if (partes.length >= 2 && /^\d+[A-Za-z]?$/.test(partes[1])) {
-    partes[0] = partes[0] + ' ' + partes[1];
-    partes.splice(1, 1);
+  // 3. Calle = partes[0]
+  let calle = partes[0];
+
+  // 4. Buscar primera parte numérica = número de casa
+  let numero = '';
+  let idxNumero = -1;
+  for (let i = 1; i < partes.length; i++) {
+    if (/^\d+[A-Za-z]?$/.test(partes[i])) {
+      numero = partes[i];
+      idxNumero = i;
+      break;
+    }
   }
 
-  partes = partes.map(function(p) {
-    return p.split(' ').map(function(w) {
-      if (w.length === 0) return w;
-      if (w.length <= 2 && w === w.toUpperCase()) return w.toUpperCase();
-      if (w === w.toUpperCase() && w.length > 2) return w.charAt(0) + w.slice(1).toLowerCase();
-      return w;
-    }).join(' ');
-  });
+  // 5. Colonia = siguiente parte después del número
+  let colonia = '';
+  let municipio = '';
+  if (idxNumero > -1) {
+    colonia = partes[idxNumero + 1] || '';
+    municipio = partes[idxNumero + 2] || '';
+  }
 
-  let resultado = partes.join(', ');
-  if (cp) resultado += ', ' + cp;
-  resultado += ', México';
-  return resultado;
+  // Si no hay colonia pero hay partes, intentar tomar la siguiente
+  if (!colonia && partes.length > 1) colonia = partes[1] || '';
+  if (!municipio && partes.length > 2) municipio = partes[2] || '';
+
+  // 6. Abreviar tipos de vía
+  calle = calle
+    .replace(/\bBoulevard\b/gi, 'Blvd.')
+    .replace(/\bBulevar\b/gi, 'Blvd.')
+    .replace(/\bAvenida\b/gi, 'Av.')
+    .replace(/\bProlongaci[oó]n\b/gi, 'Prol.')
+    .replace(/\bCalzada\b/gi, 'Calz.')
+    .replace(/\bCarretera\b/gi, 'Carret.');
+
+  // 7. Title Case
+  calle = titleCaseMx(calle);
+  colonia = titleCaseMx(colonia);
+  municipio = titleCaseMx(municipio);
+
+  // 8. Armar: "Calle Num, Colonia, CP Municipio, Méx"
+  const partesFinales = [];
+  partesFinales.push(calle + (numero ? ' ' + numero : ''));
+  if (colonia) partesFinales.push(colonia);
+
+  let cpMun = cp;
+  if (municipio) cpMun = (cpMun ? cpMun + ' ' : '') + municipio;
+  if (cpMun.trim()) partesFinales.push(cpMun.trim());
+
+  partesFinales.push('Méx');
+
+  return partesFinales.join(', ');
 }
 
-// ---------- Render lista CON CLICK PARA VISTA PREVIA ----------
+// ---------- Render lista ----------
 function renderPackages() {
   if (packages.length === 0) {
     packagesList.innerHTML = '<p class="empty">Aún no hay paquetes. Captura una etiqueta para comenzar.</p>';
     btnOptimize.disabled = true;
     return;
   }
-
   let html = '';
   if (ordenManual) {
-    html += '<div class="orden-banner">' +
-              '✋ Orden manual activo. Usa ▲▼ para ajustar.' +
-              '<button id="btnResetOrden" class="reset-btn">🔄 Volver a orden óptimo</button>' +
-            '</div>';
+    html += '<div class="orden-banner">✋ Orden manual activo. Usa ▲▼ para ajustar.' +
+            '<button id="btnResetOrden" class="reset-btn">🔄 Volver a orden óptimo</button></div>';
   }
-
   packages.forEach(function(p, i) {
     const esPrimero = (i === 0);
     const esUltimo  = (i === packages.length - 1);
@@ -205,17 +247,14 @@ function renderPackages() {
               '</div>' +
             '</div>';
   });
-
   packagesList.innerHTML = html;
 
-  // Click en el número o el info → vista previa
   document.querySelectorAll('.pkg-num, .pkg-info').forEach(function(el) {
     el.addEventListener('click', function(e) {
       const idx = parseInt(e.target.dataset.idx);
       if (!isNaN(idx)) abrirVistaPrevia(idx);
     });
   });
-
   document.querySelectorAll('.btn-up').forEach(function(btn) {
     btn.addEventListener('click', function(e) {
       e.stopPropagation();
@@ -240,7 +279,6 @@ function renderPackages() {
       renderPackages();
     });
   });
-
   const btnReset = document.getElementById('btnResetOrden');
   if (btnReset) {
     btnReset.addEventListener('click', function() {
@@ -249,7 +287,6 @@ function renderPackages() {
       alert('Orden manual desactivado.');
     });
   }
-
   btnOptimize.disabled = packages.length === 0;
 }
 
@@ -263,17 +300,15 @@ function moverPaquete(fromIdx, toIdx) {
   renderPackages();
 }
 
-// ---------- Vista previa de mapa ----------
+// ---------- Vista previa ----------
 async function abrirVistaPrevia(idx) {
   const p = packages[idx];
   if (!p) return;
   previewPackageIndex = idx;
-
   previewTitle.textContent = p.recipient ? p.recipient : ('Paquete ' + (idx + 1));
   previewAddress.textContent = p.address;
   previewModal.hidden = false;
 
-  // Si no tiene coords, geocodificar
   if (!p.coords) {
     showLoader('Ubicando dirección…');
     try {
@@ -289,35 +324,27 @@ async function abrirVistaPrevia(idx) {
     }
   }
 
-  // Inicializar el mini mapa después de que el modal esté visible
   setTimeout(function() {
     if (previewMapInstance) {
       previewMapInstance.remove();
       previewMapInstance = null;
     }
-    previewMapInstance = L.map('previewMap', { zoomControl: true }).setView(
-      [p.coords.lat, p.coords.lon], 16
-    );
+    previewMapInstance = L.map('previewMap', { zoomControl: true }).setView([p.coords.lat, p.coords.lon], 16);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '© OSM', maxZoom: 19
     }).addTo(previewMapInstance);
-
     const icono = L.divIcon({
       className: 'stop-marker',
       html: '<div class="stop-pin"><span>' + (idx + 1) + '</span></div>',
       iconSize: [30, 30], iconAnchor: [15, 30]
     });
-    previewMapMarker = L.marker([p.coords.lat, p.coords.lon], { icon: icono })
-      .addTo(previewMapInstance);
+    previewMapMarker = L.marker([p.coords.lat, p.coords.lon], { icon: icono }).addTo(previewMapInstance);
     previewMapInstance.invalidateSize();
   }, 150);
 }
 
 btnClosePreview.addEventListener('click', function() {
-  if (previewMapInstance) {
-    previewMapInstance.remove();
-    previewMapInstance = null;
-  }
+  if (previewMapInstance) { previewMapInstance.remove(); previewMapInstance = null; }
   previewModal.hidden = true;
 });
 
@@ -378,18 +405,15 @@ btnConfirmCrop.addEventListener('click', async function() {
     imageSmoothingEnabled: true, imageSmoothingQuality: 'high'
   });
   if (!canvasRecortado) { alert('No se pudo recortar la imagen.'); return; }
-
   labelPreview.src = canvasRecortado.toDataURL('image/jpeg', 0.9);
   cropperInstance.destroy();
   cropperInstance = null;
   cropModal.hidden = true;
   rotacionActual = 0;
-
   inputRecipient.value = '';
   inputAddress.value = '';
   ocrText.textContent = '';
   addressModal.hidden = false;
-
   showLoader('Enviando a OCR.space…');
   try {
     const texto = await ocrSpaceReconocer(canvasRecortado, getApiKey());
@@ -409,13 +433,9 @@ btnConfirmCrop.addEventListener('click', async function() {
 
 // ---------- Correcciones OCR ----------
 const CORRECCIONES_OCR = [
-  [/\bMETEPECCP\b/gi, 'METEPEC, CP'],
   [/\b([A-ZÁÉÍÓÚÑ]{4,})CP\.?\s*(\d{5})/g, '$1, CP $2'],
-  [/\bCP\.?\s*(\d{5})/gi, 'CP $1'],
-  [/\bSANTA\s+MARIA\b/gi, 'Santa María'],
-  [/\bSAN\s+MIGUEL\b/gi, 'San Miguel']
+  [/\bCP\.?\s*(\d{5})/gi, 'CP $1']
 ];
-
 function aplicarCorrecciones(texto) {
   let t = texto;
   for (let i = 0; i < CORRECCIONES_OCR.length; i++) {
@@ -425,24 +445,21 @@ function aplicarCorrecciones(texto) {
 }
 
 function limpiarDireccion(s) {
-  return s
-    .replace(/direcci[oó]n\s*(completa)?[:\s]*/gi, '')
-    .replace(/\s+/g, ' ')
-    .replace(/\s*,\s*/g, ', ')
-    .replace(/[.,;]+$/, '')
-    .trim();
+  return s.replace(/direcci[oó]n\s*(completa)?[:\s]*/gi, '')
+          .replace(/\s+/g, ' ')
+          .replace(/\s*,\s*/g, ', ')
+          .replace(/[.,;]+$/, '')
+          .trim();
 }
 
 function detectarDireccion(texto) {
   let t = aplicarCorrecciones(texto).replace(/[""«»]/g, '"').replace(/[|]/g, 'I');
   const lineas = t.split('\n').map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 1; });
   if (lineas.length === 0) return '';
-
   const stopWords = ['obs:', 'obs :', 'observaciones:', 'remitente:', 'destinatario:',
                      'tel:', 'teléfono:', 'guía:', 'guia:', 'pedido:', 'factura:',
                      'fecha:', 'hora:', 'peso:', 'bultos:', 'contenido:',
                      'referencia:', 'ref:', 'nota:', 'notas:', 'código:', 'codigo:'];
-
   let idxInicio = -1;
   for (let i = 0; i < lineas.length; i++) {
     if (/direcci[oó]n\s*(?:completa)?/i.test(lineas[i])) {
@@ -451,7 +468,6 @@ function detectarDireccion(texto) {
       break;
     }
   }
-
   if (idxInicio > -1) {
     const resultado = [];
     for (let i = idxInicio; i < lineas.length; i++) {
@@ -465,7 +481,6 @@ function detectarDireccion(texto) {
     }
     if (resultado.length > 0) return limpiarDireccion(resultado.join(', '));
   }
-
   const textoCompleto = lineas.join(' ');
   const matchCP = textoCompleto.match(/\b(\d{5})\b/);
   let idxCP = -1;
@@ -475,7 +490,6 @@ function detectarDireccion(texto) {
     const fin = Math.min(lineas.length, idxCP + 2);
     return limpiarDireccion(lineas.slice(inicio, fin).join(', '));
   }
-
   return limpiarDireccion(lineas.slice(0, 6).join(', '));
 }
 
@@ -538,25 +552,18 @@ async function geocodificarDireccion(direccion) {
     err.intentos = ['❌ Sin CP'];
     throw err;
   }
-
   const intentos = [];
   try {
     const r1 = await geocodificarConNominatim(cp);
     if (r1) return r1;
     intentos.push('❌ "' + cp + '" → sin resultados');
-  } catch (err) {
-    intentos.push('⚠️ "' + cp + '" → ' + err.message);
-  }
-
+  } catch (err) { intentos.push('⚠️ "' + cp + '" → ' + err.message); }
   await new Promise(function(res) { setTimeout(res, 1200); });
   try {
     const r2 = await geocodificarConNominatim(cp + ', México');
     if (r2) return r2;
     intentos.push('❌ "' + cp + ', México" → sin resultados');
-  } catch (err) {
-    intentos.push('⚠️ "' + cp + ', México" → ' + err.message);
-  }
-
+  } catch (err) { intentos.push('⚠️ "' + cp + ', México" → ' + err.message); }
   const err = new Error('No se encontró el CP.\n' + intentos.join('\n'));
   err.intentos = intentos;
   throw err;
@@ -567,7 +574,6 @@ btnOptimize.addEventListener('click', async function() {
   if (packages.length === 0) return;
   showLoader('Geocodificando direcciones…');
   const errores = [];
-
   try {
     for (let i = 0; i < packages.length; i++) {
       const p = packages[i];
@@ -581,26 +587,13 @@ btnOptimize.addEventListener('click', async function() {
         errores.push({ address: p.address, detalles: err.intentos || [err.message] });
       }
     }
-
     const validos = packages.filter(function(p) { return p.coords; });
     const fallidos = packages.filter(function(p) { return !p.coords; });
-
-    if (validos.length === 0) {
-      hideLoader();
-      alert('No se pudo geocodificar ninguna dirección.');
-      return;
-    }
-
+    if (validos.length === 0) { hideLoader(); alert('No se pudo geocodificar ninguna dirección.'); return; }
     const irAlMapa = function() {
-      savePackages();
-      hideLoader();
-      currentStopIndex = 0;
-      mostrarVistaMapa();
-      if (fallidos.length > 0) {
-        setTimeout(function() { alert('Ruta lista. ' + fallidos.length + ' omitidas.'); }, 500);
-      }
+      savePackages(); hideLoader(); currentStopIndex = 0; mostrarVistaMapa();
+      if (fallidos.length > 0) setTimeout(function() { alert('Ruta lista. ' + fallidos.length + ' omitidas.'); }, 500);
     };
-
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         function(pos) {
@@ -617,10 +610,7 @@ btnOptimize.addEventListener('click', async function() {
       if (!ordenManual) ordenarPorVecinoMasCercano(validos[0].coords, validos);
       irAlMapa();
     }
-  } catch (err) {
-    hideLoader();
-    alert('Error al optimizar: ' + err.message);
-  }
+  } catch (err) { hideLoader(); alert('Error al optimizar: ' + err.message); }
 });
 
 // ---------- Vista mapa ----------
@@ -657,20 +647,16 @@ function inicializarMapa() {
 function redibujarRuta() {
   if (!mapInstance) return;
   const validos = packages.filter(function(p) { return p.coords; });
-
   if (userLocation) {
     if (window._userMarker) mapInstance.removeLayer(window._userMarker);
     const userIcon = L.divIcon({ className: 'user-marker', html: '🔵', iconSize: [20, 20], iconAnchor: [10, 10] });
-    window._userMarker = L.marker([userLocation.lat, userLocation.lon], { icon: userIcon })
-      .bindPopup('📍 Tu ubicación');
+    window._userMarker = L.marker([userLocation.lat, userLocation.lon], { icon: userIcon }).bindPopup('📍 Tu ubicación');
     window._userMarker.addTo(mapInstance);
   }
-
   const numActual = validos.length;
   if (window._lastNumStops !== numActual || mapMarkers.length !== numActual) {
     mapMarkers.forEach(function(m) { mapInstance.removeLayer(m); });
     mapMarkers = [];
-
     validos.forEach(function(p, i) {
       const icono = L.divIcon({
         className: 'stop-marker',
@@ -686,12 +672,10 @@ function redibujarRuta() {
     });
     window._lastNumStops = numActual;
   }
-
   if (mapRouteLine) { mapInstance.removeLayer(mapRouteLine); mapRouteLine = null; }
   const coords = [];
   if (userLocation) coords.push([userLocation.lat, userLocation.lon]);
   validos.forEach(function(p) { coords.push([p.coords.lat, p.coords.lon]); });
-
   if (coords.length > 1) {
     mapRouteLine = L.polyline(coords, { color: '#22c55e', weight: 4, dashArray: '8, 8', opacity: 0.8 }).addTo(mapInstance);
     if (!window._mapFitted) {
@@ -701,7 +685,6 @@ function redibujarRuta() {
   } else if (coords.length === 1) {
     mapInstance.setView(coords[0], 15);
   }
-
   actualizarPanelNavegacion();
 }
 
@@ -712,32 +695,24 @@ function actualizarPanelNavegacion() {
   if (!actual) {
     navCurrentStop.textContent = '✓ Completado';
     navInstruction.textContent = '🎉 Todas las paradas completadas';
-    navDistance.textContent = '—';
-    navEta.textContent = '—';
-    return;
+    navDistance.textContent = '—'; navEta.textContent = '—'; return;
   }
   navCurrentStop.textContent = 'Parada ' + (currentStopIndex + 1) + ' de ' + validos.length;
-
   let contenido = '';
   if (actual.recipient) contenido += '<strong>' + actual.recipient + '</strong><br>';
   contenido += '<small>' + actual.address + '</small>';
   navInstruction.innerHTML = contenido;
-
   if (userLocation) {
     const dist = distancia(userLocation, actual.coords);
     navDistance.textContent = '📏 ' + dist.toFixed(1) + ' km';
     navEta.textContent = '⏱️ ~' + Math.round((dist / 30) * 60) + ' min';
-  } else {
-    navDistance.textContent = '📏 —';
-    navEta.textContent = '⏱️ —';
-  }
+  } else { navDistance.textContent = '📏 —'; navEta.textContent = '⏱️ —'; }
 }
 
 // ---------- Botones navegación ----------
 btnExitNav.addEventListener('click', function() {
   if (watchId) { navigator.geolocation.clearWatch(watchId); watchId = null; }
-  viewMap.hidden = true;
-  viewHome.hidden = false;
+  viewMap.hidden = true; viewHome.hidden = false;
 });
 
 btnRepeat.addEventListener('click', function() {
@@ -750,10 +725,8 @@ btnRepeat.addEventListener('click', function() {
   texto += actual.address + '.';
   if (userLocation) texto += ' Está a ' + distancia(userLocation, actual.coords).toFixed(1) + ' kilómetros.';
   const utt = new SpeechSynthesisUtterance(texto);
-  utt.lang = 'es-MX';
-  utt.rate = 0.95;
-  speechSynthesis.cancel();
-  speechSynthesis.speak(utt);
+  utt.lang = 'es-MX'; utt.rate = 0.95;
+  speechSynthesis.cancel(); speechSynthesis.speak(utt);
 });
 
 btnCopy.addEventListener('click', async function() {
@@ -800,8 +773,7 @@ btnNext.addEventListener('click', function() {
     alert('🎉 ¡Todas las paradas completadas!');
     setTimeout(function() {
       if (watchId) { navigator.geolocation.clearWatch(watchId); watchId = null; }
-      viewMap.hidden = true;
-      viewHome.hidden = false;
+      viewMap.hidden = true; viewHome.hidden = false;
       renderPackages();
     }, 1500);
     return;
@@ -812,7 +784,6 @@ btnNext.addEventListener('click', function() {
   renderPackages();
 });
 
-// ---------- Vecino más cercano ----------
 function ordenarPorVecinoMasCercano(inicio, lista) {
   const restantes = lista.slice();
   const orden = [];
@@ -846,4 +817,4 @@ function distancia(a, b) {
 }
 
 document.addEventListener('DOMContentLoaded', function() { renderPackages(); });
-console.log('app v25 cargado');
+console.log('app v26 cargado');
