@@ -54,6 +54,10 @@ const btnSaveSettings    = document.getElementById('btnSaveSettings');
 
 const loader     = document.getElementById('loader');
 const loaderText = document.getElementById('loaderText');
+// ⚠️ DETECTOR DE VERSIÓN — cambia el string cuando hagas cambios
+const MI_VERSION = 'v17-2026-09-30';
+const versionTag = document.getElementById('versionTag');
+if (versionTag) versionTag.textContent = MI_VERSION;
 
 function showLoader(msg) { loaderText.textContent = msg || 'Procesando…'; loader.hidden = false; }
 function hideLoader() { loader.hidden = true; }
