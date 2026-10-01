@@ -1,10 +1,9 @@
 // ============================================
-//  Enrutador PWA — Lógica principal (v24)
-//  + Dirección estilo México: Calle Num, Colonia, CP, México
-//  + OCR limpia "Dirección completa:"
+//  Enrutador PWA — Lógica principal (v25)
+//  + Vista previa de mapa al tocar un paquete
 // ============================================
 
-const MI_VERSION = 'v24-2026-10-01';
+const MI_VERSION = 'v25-2026-10-01';
 
 // ---------- DOM ----------
 const btnCapture   = document.getElementById('btnCapture');
@@ -39,6 +38,13 @@ const inputApiKey        = document.getElementById('inputApiKey');
 const btnCancelSettings  = document.getElementById('btnCancelSettings');
 const btnSaveSettings    = document.getElementById('btnSaveSettings');
 
+const previewModal    = document.getElementById('previewModal');
+const previewTitle    = document.getElementById('previewTitle');
+const previewMap      = document.getElementById('previewMap');
+const previewAddress  = document.getElementById('previewAddress');
+const btnClosePreview = document.getElementById('btnClosePreview');
+const btnPreviewMaps  = document.getElementById('btnPreviewMaps');
+
 const loader     = document.getElementById('loader');
 const loaderText = document.getElementById('loaderText');
 
@@ -67,6 +73,10 @@ let mapRouteLine = null;
 let currentStopIndex = 0;
 let userLocation = null;
 let watchId = null;
+
+let previewMapInstance = null;
+let previewMapMarker = null;
+let previewPackageIndex = -1;
 
 // ---------- Utilidades ----------
 function showLoader(msg) { loaderText.textContent = msg || 'Procesando…'; loader.hidden = false; }
@@ -109,73 +119,30 @@ async function ocrSpaceReconocer(canvas, apiKey) {
 
   if (data.IsErroredOnProcessing) {
     const msg = data.ErrorMessage ? (Array.isArray(data.ErrorMessage) ? data.ErrorMessage.join(' | ') : data.ErrorMessage) : 'Error';
-    const e = new Error('OCR.space error: ' + msg + '\n\nJSON: ' + JSON.stringify(data, null, 2));
-    e.detalleDebug = true; throw e;
+    const e = new Error('OCR.space error: ' + msg); e.detalleDebug = true; throw e;
   }
   if (!data.ParsedResults || !data.ParsedResults.length) {
-    const e = new Error('Sin resultados.\nHTTP: ' + resp.status + '\nOCRExitCode: ' + data.OCRExitCode + '\nJSON: ' + JSON.stringify(data, null, 2));
-    e.detalleDebug = true; throw e;
+    const e = new Error('Sin resultados.'); e.detalleDebug = true; throw e;
   }
   const parsed = data.ParsedResults[0];
-  const resultado = parsed.ParsedText || '';
-  if (resultado && resultado.trim().length > 0) return resultado;
-
-  const e = new Error('=== TEXTO VACÍO ===\n' + JSON.stringify(data, null, 2));
-  e.detalleDebug = true; throw e;
+  return parsed.ParsedText || '';
 }
 
-// ---------- Extraer componentes de dirección ----------
+// ---------- Formatear dirección ----------
 function extraerCP(texto) {
   const m = texto.match(/\b(\d{5})\b/);
   return m ? m[1] : '';
 }
 
-// Extrae la colonia: suele estar entre el número de calle y el CP
-function extraerColonia(texto) {
-  // Después de quitar "Direccion completa:" y antes del CP
-  // Patrón: ", COLONIA," o ", Colonia,"
-  const partes = texto.split(',').map(function(s) { return s.trim(); });
-  for (let i = 0; i < partes.length; i++) {
-    const p = partes[i];
-    // Colonia = no es número, no es CP, no es "mexico", tiene varias letras, longitud razonable
-    if (p.length > 3 && p.length < 60 &&
-        !/^\d+$/.test(p) &&
-        !/^cp\s*\d{5}$/i.test(p) &&
-        !/^\d{5}$/.test(p) &&
-        !/^m[eé]xico$/i.test(p) &&
-        !/^estado\s+de/i.test(p) &&
-        /[A-ZÁÉÍÓÚÑ]/i.test(p)) {
-      // Si tiene palabras como "seccion", "sección", "sector", "colonia"
-      if (/secci[oó]n|sector|colonia|col\.|fracc|manzana|mz|villa|barrio|pueblo/i.test(p)) {
-        return p;
-      }
-    }
-  }
-  return '';
-}
-
-// ---------- Formatear dirección ESTILO MÉXICO ----------
-// Formato correcto para Google Maps en México: "Calle Numero, Colonia, CP, México"
-// El CP en México ya define: Estado, Municipio, Zona
 function formatearParaGoogle(direccion) {
-  // 1. Extraer CP
   const cp = extraerCP(direccion);
-
-  // 2. Limpiar el ruido
   let d = direccion
-    // Quitar "Dirección completa:" o "Direccion completa:"
     .replace(/direcci[oó]n\s*(completa)?[:\s]*/gi, '')
-    // Quitar "BERRIOZABALCP.55710" (palabra pegada al CP)
     .replace(/([A-ZÁÉÍÓÚÑ]{3,})CP\.?\s*\d{5}/gi, '$1')
-    // Quitar "CP 55710" o "CP.55710"
     .replace(/\bCP\.?\s*\d{5}/gi, '')
-    // Quitar CP suelto
     .replace(/\b\d{5}\b/g, '')
-    // Quitar "Estado de México"
     .replace(/estado\s+de\s+m[eé]xico/gi, '')
-    // Quitar "México" suelto
     .replace(/\bm[eé]xico\b/gi, '')
-    // Normalizar comas y espacios
     .replace(/\s*,\s*/g, ', ')
     .replace(/\s{2,}/g, ' ')
     .replace(/,\s*,/g, ',')
@@ -183,43 +150,29 @@ function formatearParaGoogle(direccion) {
     .replace(/,\s*$/, '')
     .trim();
 
-  // 3. Separar por comas y limpiar cada pedazo
   let partes = d.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
 
-  // 4. Unir calle + número: "boulevard de las rosas, 386" → "boulevard de las rosas 386"
-  if (partes.length >= 2) {
-    const primera = partes[0];
-    const segunda = partes[1];
-    // Si la segunda es solo un número (o número con letra)
-    if (/^\d+[A-Za-z]?$/.test(segunda)) {
-      partes[0] = primera + ' ' + segunda;
-      partes.splice(1, 1);
-    }
+  if (partes.length >= 2 && /^\d+[A-Za-z]?$/.test(partes[1])) {
+    partes[0] = partes[0] + ' ' + partes[1];
+    partes.splice(1, 1);
   }
 
-  // 5. Title Case en cada parte
   partes = partes.map(function(p) {
     return p.split(' ').map(function(w) {
       if (w.length === 0) return w;
-      // Preservar siglas de 2 letras o menos (MZ, LT, etc.)
       if (w.length <= 2 && w === w.toUpperCase()) return w.toUpperCase();
-      // Si es todo mayúsculas y largo, capitalizar
-      if (w === w.toUpperCase() && w.length > 2) {
-        return w.charAt(0) + w.slice(1).toLowerCase();
-      }
+      if (w === w.toUpperCase() && w.length > 2) return w.charAt(0) + w.slice(1).toLowerCase();
       return w;
     }).join(' ');
   });
 
-  // 6. Armar: "Calle Numero, Colonia, CP, México"
   let resultado = partes.join(', ');
   if (cp) resultado += ', ' + cp;
   resultado += ', México';
-
   return resultado;
 }
 
-// ---------- Render lista ----------
+// ---------- Render lista CON CLICK PARA VISTA PREVIA ----------
 function renderPackages() {
   if (packages.length === 0) {
     packagesList.innerHTML = '<p class="empty">Aún no hay paquetes. Captura una etiqueta para comenzar.</p>';
@@ -240,8 +193,8 @@ function renderPackages() {
     const esUltimo  = (i === packages.length - 1);
     const titulo = p.recipient ? p.recipient : ('Paquete ' + (i + 1));
     html += '<div class="package-item" data-idx="' + i + '">' +
-              '<div class="pkg-num">' + (i + 1) + '</div>' +
-              '<div class="pkg-info">' +
+              '<div class="pkg-num" data-idx="' + i + '">' + (i + 1) + '</div>' +
+              '<div class="pkg-info" data-idx="' + i + '">' +
                 '<strong>' + titulo + '</strong>' +
                 '<span>' + p.address + '</span>' +
               '</div>' +
@@ -255,20 +208,31 @@ function renderPackages() {
 
   packagesList.innerHTML = html;
 
+  // Click en el número o el info → vista previa
+  document.querySelectorAll('.pkg-num, .pkg-info').forEach(function(el) {
+    el.addEventListener('click', function(e) {
+      const idx = parseInt(e.target.dataset.idx);
+      if (!isNaN(idx)) abrirVistaPrevia(idx);
+    });
+  });
+
   document.querySelectorAll('.btn-up').forEach(function(btn) {
     btn.addEventListener('click', function(e) {
+      e.stopPropagation();
       const idx = parseInt(e.target.dataset.idx);
       if (idx > 0) moverPaquete(idx, idx - 1);
     });
   });
   document.querySelectorAll('.btn-down').forEach(function(btn) {
     btn.addEventListener('click', function(e) {
+      e.stopPropagation();
       const idx = parseInt(e.target.dataset.idx);
       if (idx < packages.length - 1) moverPaquete(idx, idx + 1);
     });
   });
   document.querySelectorAll('.pkg-delete').forEach(function(btn) {
     btn.addEventListener('click', function(e) {
+      e.stopPropagation();
       const idx = parseInt(e.target.dataset.idx);
       if (!confirm('¿Eliminar este paquete?')) return;
       packages.splice(idx, 1);
@@ -282,7 +246,7 @@ function renderPackages() {
     btnReset.addEventListener('click', function() {
       ordenManual = false;
       renderPackages();
-      alert('Orden manual desactivado. El próximo "Optimizar ruta" volverá a ordenar por cercanía.');
+      alert('Orden manual desactivado.');
     });
   }
 
@@ -298,6 +262,72 @@ function moverPaquete(fromIdx, toIdx) {
   savePackages();
   renderPackages();
 }
+
+// ---------- Vista previa de mapa ----------
+async function abrirVistaPrevia(idx) {
+  const p = packages[idx];
+  if (!p) return;
+  previewPackageIndex = idx;
+
+  previewTitle.textContent = p.recipient ? p.recipient : ('Paquete ' + (idx + 1));
+  previewAddress.textContent = p.address;
+  previewModal.hidden = false;
+
+  // Si no tiene coords, geocodificar
+  if (!p.coords) {
+    showLoader('Ubicando dirección…');
+    try {
+      const resultado = await geocodificarDireccion(p.address);
+      p.coords = { lat: resultado.lat, lon: resultado.lon };
+      savePackages();
+      hideLoader();
+    } catch (err) {
+      hideLoader();
+      previewModal.hidden = true;
+      alert('No se pudo ubicar esta dirección.\n\n' + (err.message || ''));
+      return;
+    }
+  }
+
+  // Inicializar el mini mapa después de que el modal esté visible
+  setTimeout(function() {
+    if (previewMapInstance) {
+      previewMapInstance.remove();
+      previewMapInstance = null;
+    }
+    previewMapInstance = L.map('previewMap', { zoomControl: true }).setView(
+      [p.coords.lat, p.coords.lon], 16
+    );
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OSM', maxZoom: 19
+    }).addTo(previewMapInstance);
+
+    const icono = L.divIcon({
+      className: 'stop-marker',
+      html: '<div class="stop-pin"><span>' + (idx + 1) + '</span></div>',
+      iconSize: [30, 30], iconAnchor: [15, 30]
+    });
+    previewMapMarker = L.marker([p.coords.lat, p.coords.lon], { icon: icono })
+      .addTo(previewMapInstance);
+    previewMapInstance.invalidateSize();
+  }, 150);
+}
+
+btnClosePreview.addEventListener('click', function() {
+  if (previewMapInstance) {
+    previewMapInstance.remove();
+    previewMapInstance = null;
+  }
+  previewModal.hidden = true;
+});
+
+btnPreviewMaps.addEventListener('click', function() {
+  const p = packages[previewPackageIndex];
+  if (!p) return;
+  const query = formatearParaGoogle(p.address);
+  const url = 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(query);
+  window.open(url, '_blank');
+});
 
 // ---------- Captura ----------
 btnCapture.addEventListener('click', function() {
@@ -396,7 +426,6 @@ function aplicarCorrecciones(texto) {
 
 function limpiarDireccion(s) {
   return s
-    // Quitar prefijos como "Dirección completa:"
     .replace(/direcci[oó]n\s*(completa)?[:\s]*/gi, '')
     .replace(/\s+/g, ' ')
     .replace(/\s*,\s*/g, ', ')
@@ -404,7 +433,6 @@ function limpiarDireccion(s) {
     .trim();
 }
 
-// Detección de dirección: toma desde "Dirección completa:" hasta otra sección
 function detectarDireccion(texto) {
   let t = aplicarCorrecciones(texto).replace(/[""«»]/g, '"').replace(/[|]/g, 'I');
   const lineas = t.split('\n').map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 1; });
@@ -419,7 +447,6 @@ function detectarDireccion(texto) {
   for (let i = 0; i < lineas.length; i++) {
     if (/direcci[oó]n\s*(?:completa)?/i.test(lineas[i])) {
       idxInicio = i;
-      // Quitar el prefijo "Dirección completa:" de esa línea
       lineas[i] = lineas[i].replace(/^.*?direcci[oó]n\s*(?:completa)?[:\s]*/i, '').trim();
       break;
     }
@@ -439,7 +466,6 @@ function detectarDireccion(texto) {
     if (resultado.length > 0) return limpiarDireccion(resultado.join(', '));
   }
 
-  // Fallback: buscar CP y tomar algunas líneas antes + después
   const textoCompleto = lineas.join(' ');
   const matchCP = textoCompleto.match(/\b(\d{5})\b/);
   let idxCP = -1;
@@ -493,7 +519,7 @@ btnSaveAddress.addEventListener('click', function() {
   addressModal.hidden = true;
 });
 
-// ---------- Geocodificación por CP ----------
+// ---------- Geocodificación ----------
 async function geocodificarConNominatim(consulta) {
   const url = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=mx&q=' + encodeURIComponent(consulta);
   const r = await fetch(url, { cache: 'no-store' });
@@ -505,17 +531,15 @@ async function geocodificarConNominatim(consulta) {
   return null;
 }
 
-// En México el CP es la clave: busca solo por CP
 async function geocodificarDireccion(direccion) {
   const cp = extraerCP(direccion);
   if (!cp) {
-    const err = new Error('No se encontró código postal en la dirección.');
+    const err = new Error('Sin código postal en la dirección.');
     err.intentos = ['❌ Sin CP'];
     throw err;
   }
 
   const intentos = [];
-  // Intentar 1: solo el CP
   try {
     const r1 = await geocodificarConNominatim(cp);
     if (r1) return r1;
@@ -524,7 +548,6 @@ async function geocodificarDireccion(direccion) {
     intentos.push('⚠️ "' + cp + '" → ' + err.message);
   }
 
-  // Intentar 2: CP + México
   await new Promise(function(res) { setTimeout(res, 1200); });
   try {
     const r2 = await geocodificarConNominatim(cp + ', México');
@@ -574,7 +597,7 @@ btnOptimize.addEventListener('click', async function() {
       currentStopIndex = 0;
       mostrarVistaMapa();
       if (fallidos.length > 0) {
-        setTimeout(function() { alert('Ruta lista. ' + fallidos.length + ' dirección(es) omitidas.'); }, 500);
+        setTimeout(function() { alert('Ruta lista. ' + fallidos.length + ' omitidas.'); }, 500);
       }
     };
 
@@ -637,14 +660,9 @@ function redibujarRuta() {
 
   if (userLocation) {
     if (window._userMarker) mapInstance.removeLayer(window._userMarker);
-    const userIcon = L.divIcon({
-      className: 'user-marker',
-      html: '🔵',
-      iconSize: [20, 20],
-      iconAnchor: [10, 10]
-    });
+    const userIcon = L.divIcon({ className: 'user-marker', html: '🔵', iconSize: [20, 20], iconAnchor: [10, 10] });
     window._userMarker = L.marker([userLocation.lat, userLocation.lon], { icon: userIcon })
-      .bindPopup('📍 Tu ubicación actual');
+      .bindPopup('📍 Tu ubicación');
     window._userMarker.addTo(mapInstance);
   }
 
@@ -661,10 +679,8 @@ function redibujarRuta() {
       });
       const titulo = p.recipient ? p.recipient : ('Paquete ' + (i + 1));
       const marker = L.marker([p.coords.lat, p.coords.lon], { icon: icono })
-        .bindPopup(
-          '<strong>' + (i + 1) + '. ' + titulo + '</strong><br>' + p.address,
-          { autoClose: false, closeOnClick: false, closeButton: true, autoPan: true }
-        );
+        .bindPopup('<strong>' + (i + 1) + '. ' + titulo + '</strong><br>' + p.address,
+          { autoClose: false, closeOnClick: false, closeButton: true, autoPan: true });
       marker.addTo(mapInstance);
       mapMarkers.push(marker);
     });
@@ -677,9 +693,7 @@ function redibujarRuta() {
   validos.forEach(function(p) { coords.push([p.coords.lat, p.coords.lon]); });
 
   if (coords.length > 1) {
-    mapRouteLine = L.polyline(coords, {
-      color: '#22c55e', weight: 4, dashArray: '8, 8', opacity: 0.8
-    }).addTo(mapInstance);
+    mapRouteLine = L.polyline(coords, { color: '#22c55e', weight: 4, dashArray: '8, 8', opacity: 0.8 }).addTo(mapInstance);
     if (!window._mapFitted) {
       mapInstance.fitBounds(mapRouteLine.getBounds(), { padding: [60, 60] });
       window._mapFitted = true;
@@ -702,13 +716,10 @@ function actualizarPanelNavegacion() {
     navEta.textContent = '—';
     return;
   }
-
   navCurrentStop.textContent = 'Parada ' + (currentStopIndex + 1) + ' de ' + validos.length;
 
   let contenido = '';
-  if (actual.recipient) {
-    contenido += '<strong>' + actual.recipient + '</strong><br>';
-  }
+  if (actual.recipient) contenido += '<strong>' + actual.recipient + '</strong><br>';
   contenido += '<small>' + actual.address + '</small>';
   navInstruction.innerHTML = contenido;
 
@@ -745,17 +756,14 @@ btnRepeat.addEventListener('click', function() {
   speechSynthesis.speak(utt);
 });
 
-// ---------- Copiar dirección ----------
 btnCopy.addEventListener('click', async function() {
   const validos = packages.filter(function(p) { return p.coords; });
   const actual = validos[currentStopIndex];
   if (!actual) return;
-
   const texto = formatearParaGoogle(actual.address);
-
   try {
     await navigator.clipboard.writeText(texto);
-    alert('📋 Dirección copiada:\n\n' + texto + '\n\nPégala en Google Maps, Waze o WhatsApp.');
+    alert('📋 Copiada:\n\n' + texto);
   } catch (err) {
     const textarea = document.createElement('textarea');
     textarea.value = texto;
@@ -763,19 +771,16 @@ btnCopy.addEventListener('click', async function() {
     textarea.select();
     document.execCommand('copy');
     document.body.removeChild(textarea);
-    alert('📋 Dirección copiada:\n\n' + texto);
+    alert('📋 Copiada:\n\n' + texto);
   }
 });
 
-// ---------- Google Maps ----------
 btnOpenMaps.addEventListener('click', function() {
   const validos = packages.filter(function(p) { return p.coords; });
   const actual = validos[currentStopIndex];
   if (!actual) return;
-
   const query = formatearParaGoogle(actual.address);
-  const url = 'https://www.google.com/maps/search/?api=1&query=' +
-              encodeURIComponent(query);
+  const url = 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(query);
   window.open(url, '_blank');
 });
 
@@ -841,4 +846,4 @@ function distancia(a, b) {
 }
 
 document.addEventListener('DOMContentLoaded', function() { renderPackages(); });
-console.log('app v24 cargado');
+console.log('app v25 cargado');

@@ -125,6 +125,20 @@
     </div>
   </div>
 
+  <!-- Modal de vista previa de parada -->
+  <div id="previewModal" class="modal" hidden>
+    <div class="modal-content preview-modal-content">
+      <h2 id="previewTitle">Vista previa</h2>
+      <div id="previewMap"></div>
+      <p id="previewAddress" class="preview-address"></p>
+      <div class="modal-actions">
+        <button id="btnClosePreview" class="secondary">Cerrar</button>
+        <button id="btnPreviewMaps" class="primary">🚗 Abrir en Maps</button>
+      </div>
+    </div>
+  </div>
+
+
   <div id="loader" class="loader" hidden>
     <div class="spinner"></div>
     <p id="loaderText">Procesando…</p>
