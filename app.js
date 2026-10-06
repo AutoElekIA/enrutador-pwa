@@ -182,11 +182,75 @@ function titleCaseMx(s) {
   }).join(' ');
 }
 
+// ---------- Diccionario de correcciones MX ----------
+const CORRECCIONES_MX = [
+  // Ciudades del Edomex comunes con errores OCR típicos
+  [/tultitl[ae]n/gi, 'Tultitlan'],
+  [/tultitl[aá]n/gi, 'Tultitlan'],
+  [/tultitl[eé]n/gi, 'Tultitlan'],
+  [/coacalco/gi, 'Coacalco'],
+  [/metepec/gi, 'Metepec'],
+  [/cuautitl[aá]n/gi, 'Cuautitlan'],
+  [/ecatepec/gi, 'Ecatepec'],
+  [/tlalnepantla/gi, 'Tlalnepantla'],
+  [/naucalpan/gi, 'Naucalpan'],
+  [/atizap[aá]n/gi, 'Atizapan'],
+  [/cuautitl[aá]n\s*izcalli/gi, 'Cuautitlan Izcalli'],
+  [/neza[h]?[uy]alc[oó]yotl/gi, 'Nezahualcoyotl'],
+  [/chimalhuac[aá]n/gi, 'Chimalhuacan'],
+  [/toluca/gi, 'Toluca'],
+  [/zinacantepec/gi, 'Zinacantepec'],
+  [/lerma/gi, 'Lerma'],
+  [/ocoyoacac/gi, 'Ocoyoacac'],
+  [/huixquilucan/gi, 'Huixquilucan'],
+];
+
+function aplicarCorreccionesMx(texto) {
+  let t = texto;
+  for (let i = 0; i < CORRECCIONES_MX.length; i++) {
+    t = t.replace(CORRECCIONES_MX[i][0], CORRECCIONES_MX[i][1]);
+  }
+  return t;
+}
+
+// ---------- Distancia de Levenshtein (para similitud) ----------
+function sonSimilares(a, b) {
+  if (!a || !b) return false;
+  const s1 = a.toLowerCase().trim();
+  const s2 = b.toLowerCase().trim();
+  if (s1 === s2) return true;
+  // Solo comparar si longitudes son parecidas
+  if (Math.abs(s1.length - s2.length) > 2) return false;
+  if (s1.length < 4 || s2.length < 4) return false;
+
+  // Levenshtein simple
+  const m = s1.length, n = s2.length;
+  const dp = [];
+  for (let i = 0; i <= m; i++) { dp[i] = [i]; }
+  for (let j = 0; j <= n; j++) { dp[0][j] = j; }
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      const cost = s1[i-1] === s2[j-1] ? 0 : 1;
+      dp[i][j] = Math.min(
+        dp[i-1][j] + 1,
+        dp[i][j-1] + 1,
+        dp[i-1][j-1] + cost
+      );
+    }
+  }
+  const dist = dp[m][n];
+  // Si son muy similares (2 caracteres o menos de diferencia)
+  return dist <= 2;
+}
+
 // ---------- Formatear dirección estilo México ----------
 function formatearParaGoogle(direccion) {
   if (!direccion || !direccion.trim()) return '';
 
-  let d = direccion.replace(/\s+/g, ' ').trim();
+  // ⭐ 1. Aplicar correcciones de ciudades MX PRIMERO
+  let d = aplicarCorreccionesMx(direccion);
+
+  d = d.replace(/\s+/g, ' ').trim();
   d = d.replace(/direcci[oó]n\s*(completa)?\s*:?\s*/i, '');
 
   const cpMatch = d.match(/\b(\d{5})\b/);
@@ -208,16 +272,22 @@ function formatearParaGoogle(direccion) {
 
   let partes = d.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
 
+  // ⭐ 2. DEDUPE por similitud (no solo por igualdad)
   let partesUnicas = [];
   for (let i = 0; i < partes.length; i++) {
     const key = partes[i].toLowerCase().replace(/[^a-z0-9áéíóúñ]/g, '').trim();
     if (!key || key.length < 2) continue;
-    let esDuplicadoReciente = false;
-    for (let j = Math.max(0, partesUnicas.length - 3); j < partesUnicas.length; j++) {
+
+    let esDuplicado = false;
+    // Comparar con las últimas 4 partes
+    for (let j = Math.max(0, partesUnicas.length - 4); j < partesUnicas.length; j++) {
       const prevKey = partesUnicas[j].toLowerCase().replace(/[^a-z0-9áéíóúñ]/g, '').trim();
-      if (prevKey === key) { esDuplicadoReciente = true; break; }
+      if (prevKey === key || sonSimilares(prevKey, key)) {
+        esDuplicado = true;
+        break;
+      }
     }
-    if (!esDuplicadoReciente) partesUnicas.push(partes[i]);
+    if (!esDuplicado) partesUnicas.push(partes[i]);
   }
   partes = partesUnicas;
 
@@ -250,9 +320,11 @@ function formatearParaGoogle(direccion) {
     for (let i = 0; i < resto.length; i++) {
       const r = resto[i].toLowerCase().trim();
       let esDup = false;
+      // Dedupe contra sí mismo
       for (let j = 0; j < restoLimpio.length; j++) {
-        if (restoLimpio[j].toLowerCase().trim() === r) { esDup = true; break; }
+        if (sonSimilares(restoLimpio[j].toLowerCase().trim(), r)) { esDup = true; break; }
       }
+      // Dedupe contra el número
       if (!esDup && r !== numero.toLowerCase()) restoLimpio.push(resto[i]);
     }
 
