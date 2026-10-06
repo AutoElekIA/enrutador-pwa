@@ -5,7 +5,7 @@
 //  - Tarjeta: código arriba, dirección con negritas abajo
 // ============================================
 
-const MI_VERSION = 'v32-2026-10-06';
+const MI_VERSION = 'v35-2026-10-06';
 
 // ---------- DOM ----------
 const btnCapture   = document.getElementById('btnCapture');
@@ -206,21 +206,31 @@ function formatearParaGoogle(direccion) {
   d = d.replace(/\b\d{5}\b/g, '');
   d = d.replace(/estado\s+de\s+m[eé]xico/gi, '');
   d = d.replace(/\bm[eé]xico\b/gi, '');
-  d = d.replace(/\s*,\s*/g, ', ').replace(/,+/g, ',').replace(/^\s*,\s*/, '').replace(/\s*,\s*$/, '').replace(/\s+/g, ' ').trim();
+
+  // Limpiar puntos y separadores raros: "Cuautitlan. Cuautitlan" → "Cuautitlan, Cuautitlan"
+  d = d.replace(/\.\s+/g, ', ');
+  d = d.replace(/\s*,\s*/g, ', ');
+  d = d.replace(/,+/g, ',');
+  d = d.replace(/^\s*,\s*/, '');
+  d = d.replace(/\s*,\s*$/, '');
+  d = d.replace(/\s+/g, ' ');
+  d = d.trim();
 
   let partes = d.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
 
-  // ⭐ DEDUPE: eliminar partes consecutivas duplicadas (sin importar mayúsculas)
+  // ⭐ DEDUPE: eliminar partes duplicadas (aunque estén separadas)
   let partesUnicas = [];
+  let vistos = {};
   for (let i = 0; i < partes.length; i++) {
-    const actual = partes[i].toLowerCase().trim();
-    const anterior = partesUnicas.length > 0
-      ? partesUnicas[partesUnicas.length - 1].toLowerCase().trim()
-      : '';
-    // Si la parte actual NO es igual a la anterior, se queda
-    if (actual !== anterior && actual.length > 0) {
-      partesUnicas.push(partes[i]);
+    const key = partes[i].toLowerCase().replace(/[^a-z0-9áéíóúñ]/g, '').trim();
+    if (!key || key.length < 2) continue;
+    // Solo dedupe si aparece en las últimas 3 partes (evita deduplicar "I" de "Misiones I")
+    let esDuplicadoReciente = false;
+    for (let j = Math.max(0, partesUnicas.length - 3); j < partesUnicas.length; j++) {
+      const prevKey = partesUnicas[j].toLowerCase().replace(/[^a-z0-9áéíóúñ]/g, '').trim();
+      if (prevKey === key) { esDuplicadoReciente = true; break; }
     }
+    if (!esDuplicadoReciente) partesUnicas.push(partes[i]);
   }
   partes = partesUnicas;
 
@@ -250,18 +260,15 @@ function formatearParaGoogle(direccion) {
 
     let resto = partes.slice(idxNum + 1);
 
-    // ⭐ También deduplicar el "resto" contra la calle ya agregada
+    // ⭐ Deduplicar dentro del resto también
     let restoLimpio = [];
     for (let i = 0; i < resto.length; i++) {
       const r = resto[i].toLowerCase().trim();
-      let esDuplicado = false;
+      let esDup = false;
       for (let j = 0; j < restoLimpio.length; j++) {
-        if (restoLimpio[j].toLowerCase().trim() === r) { esDuplicado = true; break; }
+        if (restoLimpio[j].toLowerCase().trim() === r) { esDup = true; break; }
       }
-      // Si es igual a alguna palabra clave del resultado ya agregado, se omite
-      if (!esDuplicado && r !== numero.toLowerCase()) {
-        restoLimpio.push(resto[i]);
-      }
+      if (!esDup && r !== numero.toLowerCase()) restoLimpio.push(resto[i]);
     }
 
     if (restoLimpio.length > 0) resultado.push(titleCaseMx(restoLimpio[0]));
@@ -609,19 +616,42 @@ function detectarDireccion(texto) {
 }
 
 function detectarNombre(texto) {
-  const lineas = texto.split('\n').map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 2; });
+  const lineas = texto.split('\n').map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 0; });
   if (lineas.length === 0) return '';
+
+  // ESTRATEGIA 1: "DESTINATARIO: Nombre" en la misma línea
   for (let i = 0; i < lineas.length; i++) {
-    const m = lineas[i].match(/destinatario[:\s]+(.+)/i);
-    if (m && m[1].trim().length > 2) return m[1].trim();
+    const m = lineas[i].match(/destinatario\s*[:\-]?\s*(.+)/i);
+    if (m && m[1].trim().length > 2) {
+      return limpiarNombre(m[1].trim());
+    }
+    // ESTRATEGIA 2: "DESTINATARIO:" solo en la línea, nombre en la SIGUIENTE
+    if (/^destinatario\s*[:\-]?\s*$/i.test(lineas[i])) {
+      if (lineas[i + 1] && lineas[i + 1].length > 2) {
+        return limpiarNombre(lineas[i + 1]);
+      }
+    }
   }
+
+  // ESTRATEGIA 3: "NOMBRE:" en cualquier parte
   for (let i = 0; i < lineas.length; i++) {
-    const m = lineas[i].match(/nombre[:\s]+(.+)/i);
-    if (m && m[1].trim().length > 2) return m[1].trim();
+    const m = lineas[i].match(/nombre\s*[:\-]?\s*(.+)/i);
+    if (m && m[1].trim().length > 2) {
+      return limpiarNombre(m[1].trim());
+    }
   }
+
   return '';
 }
 
+// Limpiar nombre: quitar caracteres raros
+function limpiarNombre(s) {
+  return s
+    .replace(/^[\s:\-]+/, '')
+    .replace(/[\s:\-]+$/, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
 // ---------- Ajustes ----------
 btnSettings.addEventListener('click', function() { inputApiKey.value = getApiKey(); settingsModal.hidden = false; });
 btnCancelSettings.addEventListener('click', function() { settingsModal.hidden = true; });
