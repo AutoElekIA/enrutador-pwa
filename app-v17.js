@@ -190,41 +190,83 @@ function titleCaseMx(s) {
 }
 
 // ---------- Formatear dirección estilo México ----------
-// Formato final: "Calle Num, Colonia, CP Municipio"  (sin "Méx", solo se usa en México)
+// Formato final: "Calle Num, Colonia, CP Municipio"
 function formatearParaGoogle(direccion) {
   if (!direccion || !direccion.trim()) return '';
+
   let d = direccion.replace(/\s+/g, ' ').trim();
   d = d.replace(/direcci[oó]n\s*(completa)?\s*:?\s*/i, '');
+
   const cpMatch = d.match(/\b(\d{5})\b/);
   const cp = cpMatch ? cpMatch[1] : '';
+
+  // Limpiar "TULTITLANCP.54949" → "TULTITLAN"
   d = d.replace(/([A-ZÁÉÍÓÚÑ]{3,})\s*CP\.?\s*\d{5}\b/gi, '$1');
   d = d.replace(/\bCP\.?\s*\d{5}\b/gi, '');
   d = d.replace(/\b\d{5}\b/g, '');
   d = d.replace(/estado\s+de\s+m[eé]xico/gi, '');
   d = d.replace(/\bm[eé]xico\b/gi, '');
   d = d.replace(/\s*,\s*/g, ', ').replace(/,+/g, ',').replace(/^\s*,\s*/, '').replace(/\s*,\s*$/, '').replace(/\s+/g, ' ').trim();
+
   let partes = d.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
+
+  // ⭐ DEDUPE: eliminar partes consecutivas duplicadas (sin importar mayúsculas)
+  let partesUnicas = [];
+  for (let i = 0; i < partes.length; i++) {
+    const actual = partes[i].toLowerCase().trim();
+    const anterior = partesUnicas.length > 0
+      ? partesUnicas[partesUnicas.length - 1].toLowerCase().trim()
+      : '';
+    // Si la parte actual NO es igual a la anterior, se queda
+    if (actual !== anterior && actual.length > 0) {
+      partesUnicas.push(partes[i]);
+    }
+  }
+  partes = partesUnicas;
+
   if (partes.length === 0) return direccion.trim();
+
+  // Encontrar número de casa
   let idxNum = -1;
   for (let i = 1; i < partes.length; i++) {
     if (/^\d+[A-Za-z]?$/.test(partes[i])) { idxNum = i; break; }
   }
+
   let resultado = [];
+
   if (idxNum > 0) {
     let calle = partes.slice(0, idxNum).join(' ');
     let numero = partes[idxNum];
+
     calle = calle.replace(/\bBoulevard\b/gi, 'Blvd.')
                  .replace(/\bBulevar\b/gi, 'Blvd.')
                  .replace(/\bAvenida\b/gi, 'Av.')
                  .replace(/\bProlongaci[oó]n\b/gi, 'Prol.')
                  .replace(/\bCalzada\b/gi, 'Calz.')
                  .replace(/\bCarretera\b/gi, 'Carret.');
+
     calle = titleCaseMx(calle);
     resultado.push(calle + ' ' + numero);
+
     let resto = partes.slice(idxNum + 1);
-    if (resto.length > 0) resultado.push(titleCaseMx(resto[0]));
-    if (resto.length > 1) {
-      let mun = titleCaseMx(resto.slice(1).join(' '));
+
+    // ⭐ También deduplicar el "resto" contra la calle ya agregada
+    let restoLimpio = [];
+    for (let i = 0; i < resto.length; i++) {
+      const r = resto[i].toLowerCase().trim();
+      let esDuplicado = false;
+      for (let j = 0; j < restoLimpio.length; j++) {
+        if (restoLimpio[j].toLowerCase().trim() === r) { esDuplicado = true; break; }
+      }
+      // Si es igual a alguna palabra clave del resultado ya agregado, se omite
+      if (!esDuplicado && r !== numero.toLowerCase()) {
+        restoLimpio.push(resto[i]);
+      }
+    }
+
+    if (restoLimpio.length > 0) resultado.push(titleCaseMx(restoLimpio[0]));
+    if (restoLimpio.length > 1) {
+      let mun = titleCaseMx(restoLimpio.slice(1).join(' '));
       resultado.push(cp ? (cp + ' ' + mun) : mun);
     } else if (cp) {
       resultado.push(cp);
@@ -233,6 +275,7 @@ function formatearParaGoogle(direccion) {
     partes.forEach(function(p) { resultado.push(titleCaseMx(p)); });
     if (cp && resultado.indexOf(cp) === -1) resultado.push(cp);
   }
+
   return resultado.join(', ');
 }
 
@@ -360,100 +403,66 @@ function moverPaquete(fromIdx, toIdx) {
 //  ESCÁNER DE CÓDIGO DE BARRAS / QR
 // ============================================
 function abrirScanner() {
+  // Verificación de la librería
+  if (typeof Html5Qrcode === 'undefined') {
+    throw new Error('La librería del escáner no está cargada');
+  }
+  if (!scanModal || !scannerContainer) {
+    throw new Error('Elementos del modal de escáner no encontrados');
+  }
+
   currentOrderNumber = '';
   scanModal.hidden = false;
 
   setTimeout(function() {
-    if (scannerInstance) {
-      scannerInstance.clear().catch(function() {});
-      scannerInstance = null;
-    }
+    try {
+      if (scannerInstance) {
+        scannerInstance.clear().catch(function() {});
+        scannerInstance = null;
+      }
 
-    scannerInstance = new Html5Qrcode("scanner-container");
+      scannerInstance = new Html5Qrcode("scanner-container");
 
-    const config = {
-      fps: 10,
-      qrbox: function(viewfinderWidth, viewfinderHeight) {
-        const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
-        return {
-          width: Math.floor(viewfinderWidth * 0.85),
-          height: Math.floor(minEdge * 0.5)
-        };
-      },
-      aspectRatio: 1.0
-    };
+      const config = {
+        fps: 10,
+        qrbox: function(viewfinderWidth, viewfinderHeight) {
+          const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
+          return {
+            width: Math.floor(viewfinderWidth * 0.85),
+            height: Math.floor(minEdge * 0.5)
+          };
+        },
+        aspectRatio: 1.0
+      };
 
-    scannerInstance.start(
-      { facingMode: "environment" },
-      config,
-      function(decodedText) {
-        currentOrderNumber = sanitizarNumeroOrden(decodedText);
+      scannerInstance.start(
+        { facingMode: "environment" },
+        config,
+        function(decodedText) {
+          currentOrderNumber = sanitizarNumeroOrden(decodedText);
+          cerrarScanner(function() {
+            inputOrderNumber.value = currentOrderNumber;
+            cameraInput.click();
+          });
+        },
+        function(errorMessage) {
+          // Ignorar errores de "no encontrado"
+        }
+      ).catch(function(err) {
+        console.error('Error al iniciar escáner:', err);
+        alert('No se pudo iniciar la cámara del escáner.\n\n' + (err.message || err));
         cerrarScanner(function() {
-          inputOrderNumber.value = currentOrderNumber;
           cameraInput.click();
         });
-      },
-      function(errorMessage) {
-        // Ignorar errores de "no encontrado"
-      }
-    ).catch(function(err) {
-      console.error('Error al iniciar escáner:', err);
-      alert('No se pudo iniciar la cámara del escáner.\n\n' + err.message);
-      cerrarScanner(function() {
-        cameraInput.click();
       });
-    });
+    } catch (err) {
+      console.error('Excepción en abrirScanner:', err);
+      scanModal.hidden = true;
+      alert('Error inesperado en el escáner. Se abrirá la cámara.\n\n' + (err.message || err));
+      cameraInput.click();
+    }
   }, 200);
 }
-
-function cerrarScanner(callback) {
-  if (scannerInstance) {
-    scannerInstance.stop().then(function() {
-      scannerInstance.clear().catch(function() {});
-      scannerInstance = null;
-      scanModal.hidden = true;
-      if (callback) callback();
-    }).catch(function() {
-      scannerInstance = null;
-      scanModal.hidden = true;
-      if (callback) callback();
-    });
-  } else {
-    scanModal.hidden = true;
-    if (callback) callback();
-  }
-}
-
-btnSkipScan.addEventListener('click', function() {
-  currentOrderNumber = '';
-  cerrarScanner(function() {
-    cameraInput.click();
-  });
-});
-
-// ---------- Vista previa ----------
-async function abrirVistaPrevia(idx) {
-  const p = packages[idx];
-  if (!p) return;
-  previewPackageIndex = idx;
-  previewTitle.textContent = p.recipient ? p.recipient : ('Paquete ' + (idx + 1));
-  previewAddress.textContent = p.address;
-  previewModal.hidden = false;
-
-  if (!p.coords) {
-    showLoader('Ubicando dirección…');
-    try {
-      const resultado = await geocodificarDireccion(p.address);
-      p.coords = { lat: resultado.lat, lon: resultado.lon };
-      savePackages();
-      hideLoader();
-    } catch (err) {
-      hideLoader();
-      previewModal.hidden = true;
-      alert('No se pudo ubicar esta dirección.\n\n' + (err.message || ''));
-      return;
-    }
-  }
 
   setTimeout(function() {
     if (previewMapInstance) { previewMapInstance.remove(); previewMapInstance = null; }
@@ -482,29 +491,26 @@ btnPreviewMaps.addEventListener('click', function() {
 });
 
 // ---------- Captura ----------
+// ---------- Captura ----------
 btnCapture.addEventListener('click', function() {
   if (!getApiKey()) { alert('Primero configura tu API key de OCR.space en Ajustes ⚙️'); return; }
-  abrirScanner();
-});
 
-cameraInput.addEventListener('change', function(e) {
-  if (!e.target.files || e.target.files.length === 0) return;
-  const file = e.target.files[0];
-  const reader = new FileReader();
-  reader.onload = function(ev) {
-    cropImage.src = ev.target.result;
-    cropModal.hidden = false;
-    rotacionActual = 0;
-    if (cropperInstance) { cropperInstance.destroy(); cropperInstance = null; }
-    setTimeout(function() {
-      cropperInstance = new Cropper(cropImage, {
-        viewMode: 1, aspectRatio: 2.5, autoCropArea: 0.9,
-        movable: true, zoomable: true, rotatable: true,
-        scalable: false, background: false, responsive: true
-      });
-    }, 100);
-  };
-  reader.readAsDataURL(file);
+  // ⚠️ Verificar que la librería del escáner cargó
+  if (typeof Html5Qrcode === 'undefined') {
+    console.warn('Html5Qrcode no está disponible. Se salta el escáner.');
+    // Ir directo a la cámara
+    cameraInput.click();
+    return;
+  }
+
+  // Intentar abrir el escáner
+  try {
+    abrirScanner();
+  } catch (err) {
+    console.error('Error al abrir escáner:', err);
+    alert('No se pudo iniciar el escáner.\nSe abrirá la cámara directamente.\n\n' + err.message);
+    cameraInput.click();
+  }
 });
 
 btnRotate.addEventListener('click', function() {
