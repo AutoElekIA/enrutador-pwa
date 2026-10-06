@@ -27,7 +27,7 @@
 </head>
 <body>
   <header class="app-header">
-    <h1>Enrutador <small id="versionTag" style="font-size:0.7rem;color:#22c55e;">v19</small></h1>
+    <h1>Enrutador <small id="versionTag" style="font-size:0.7rem;color:#22c55e;">v32</small></h1>
     <button id="btnSettings" class="icon-btn" title="Ajustes">⚙️</button>
   </header>
 
@@ -37,7 +37,6 @@
         <p class="empty">Aún no hay paquetes. Captura una etiqueta para comenzar.</p>
       </div>
     </section>
-
     <section id="viewMap" class="view" hidden>
       <div id="map"></div>
       <button id="btnExitNav" class="exit-nav-btn">✕</button>
@@ -51,11 +50,12 @@
           <span id="navEta">—</span>
         </div>
         <div class="nav-actions">
-  <button id="btnRepeat" class="secondary">🔊 Repetir</button>
-  <button id="btnCopy" class="secondary">📋 Copiar</button>
-  <button id="btnOpenMaps" class="secondary">🚗 Maps</button>
-  <button id="btnNext" class="primary">✓ Llegué</button>
-</div>
+          <button id="btnRepeat" class="secondary">🔊 Repetir</button>
+          <button id="btnCopy" class="secondary">📋 Copiar</button>
+          <button id="btnOpenMaps" class="secondary">🚗 Maps</button>
+          <button id="btnNext" class="primary">✓ Llegué</button>
+        </div>
+      </div>
     </section>
   </main>
 
@@ -66,6 +66,19 @@
 
   <input type="file" id="cameraInput" accept="image/*" capture="environment" hidden />
 
+  <!-- Modal de escaneo de código -->
+  <div id="scanModal" class="modal" hidden>
+    <div class="modal-content">
+      <h2>Escanea el código</h2>
+      <p class="crop-hint">Apunta al código de barras o QR de la etiqueta</p>
+      <div id="scanner-container"></div>
+      <div class="modal-actions">
+        <button id="btnSkipScan" class="secondary">Saltar escaneo</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal de recorte -->
   <div id="cropModal" class="modal" hidden>
     <div class="modal-content">
       <h2>Recorta la etiqueta</h2>
@@ -86,10 +99,14 @@
     </div>
   </div>
 
+  <!-- Modal de confirmación -->
   <div id="addressModal" class="modal" hidden>
     <div class="modal-content">
-      <h2>Confirma la dirección</h2>
+      <h2>Confirma los datos</h2>
       <img id="labelPreview" alt="Vista previa etiqueta" />
+      <label>Número de orden
+        <input id="inputOrderNumber" type="text" placeholder="Escanea o escribe el número" />
+      </label>
       <label>Destinatario
         <input id="inputRecipient" type="text" placeholder="Nombre" />
       </label>
@@ -107,6 +124,20 @@
     </div>
   </div>
 
+  <!-- Modal de vista previa -->
+  <div id="previewModal" class="modal" hidden>
+    <div class="modal-content preview-modal-content">
+      <h2 id="previewTitle">Vista previa</h2>
+      <div id="previewMap"></div>
+      <p id="previewAddress" class="preview-address"></p>
+      <div class="modal-actions">
+        <button id="btnClosePreview" class="secondary">Cerrar</button>
+        <button id="btnPreviewMaps" class="primary">🚗 Abrir en Maps</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal de ajustes -->
   <div id="settingsModal" class="modal" hidden>
     <div class="modal-content">
       <h2>Ajustes</h2>
@@ -125,20 +156,6 @@
     </div>
   </div>
 
-  <!-- Modal de vista previa de parada -->
-  <div id="previewModal" class="modal" hidden>
-    <div class="modal-content preview-modal-content">
-      <h2 id="previewTitle">Vista previa</h2>
-      <div id="previewMap"></div>
-      <p id="previewAddress" class="preview-address"></p>
-      <div class="modal-actions">
-        <button id="btnClosePreview" class="secondary">Cerrar</button>
-        <button id="btnPreviewMaps" class="primary">🚗 Abrir en Maps</button>
-      </div>
-    </div>
-  </div>
-
-
   <div id="loader" class="loader" hidden>
     <div class="spinner"></div>
     <p id="loaderText">Procesando…</p>
@@ -146,6 +163,7 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/cropperjs@1.6.1/dist/cropper.min.js"></script>
-  <script src="app-v17.js?v=22"></script>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <script src="app-v17.js?v=32c"></script>
 </body>
 </html>
