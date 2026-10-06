@@ -1,8 +1,9 @@
 // ============================================
-//  Enrutador PWA — Lógica principal (v32)
-//  - Escáner QR/código de barras para número de orden
-//  - Formato dirección estilo Google México (sin "Méx")
-//  - Tarjeta: código arriba, dirección con negritas abajo
+//  Enrutador PWA — Lógica principal (v35)
+//  - Escáner QR/código de barras
+//  - Destinatario en línea siguiente
+//  - Dedupe completo de dirección
+//  - Crop 1.8 por defecto
 // ============================================
 
 const MI_VERSION = 'v35-2026-10-06';
@@ -81,7 +82,6 @@ let previewMapInstance = null;
 let previewMapMarker = null;
 let previewPackageIndex = -1;
 
-// Estado del escáner
 let scannerInstance = null;
 let currentOrderNumber = '';
 
@@ -106,8 +106,6 @@ function escapeHtml(s) {
 function sanitizarNumeroOrden(texto) {
   if (!texto) return '';
   let t = String(texto).trim();
-
-  // Si es URL, extraer el último segmento alfanumérico significativo
   if (/^https?:\/\//i.test(t)) {
     const partes = t.split(/[\/=?#&]/);
     let mejor = '';
@@ -119,13 +117,8 @@ function sanitizarNumeroOrden(texto) {
     }
     t = mejor || t;
   }
-
-  // Quitar espacios y caracteres extraños, conservar letras/números/guiones
   t = t.replace(/[\s]+/g, '').replace(/[^A-Za-z0-9\-_]/g, '');
-
-  // Limitar a 30 caracteres
   if (t.length > 30) t = t.substring(0, 30);
-
   return t;
 }
 
@@ -190,7 +183,6 @@ function titleCaseMx(s) {
 }
 
 // ---------- Formatear dirección estilo México ----------
-// Formato final: "Calle Num, Colonia, CP Municipio"
 function formatearParaGoogle(direccion) {
   if (!direccion || !direccion.trim()) return '';
 
@@ -200,14 +192,12 @@ function formatearParaGoogle(direccion) {
   const cpMatch = d.match(/\b(\d{5})\b/);
   const cp = cpMatch ? cpMatch[1] : '';
 
-  // Limpiar "TULTITLANCP.54949" → "TULTITLAN"
   d = d.replace(/([A-ZÁÉÍÓÚÑ]{3,})\s*CP\.?\s*\d{5}\b/gi, '$1');
   d = d.replace(/\bCP\.?\s*\d{5}\b/gi, '');
   d = d.replace(/\b\d{5}\b/g, '');
   d = d.replace(/estado\s+de\s+m[eé]xico/gi, '');
   d = d.replace(/\bm[eé]xico\b/gi, '');
 
-  // Limpiar puntos y separadores raros: "Cuautitlan. Cuautitlan" → "Cuautitlan, Cuautitlan"
   d = d.replace(/\.\s+/g, ', ');
   d = d.replace(/\s*,\s*/g, ', ');
   d = d.replace(/,+/g, ',');
@@ -218,13 +208,10 @@ function formatearParaGoogle(direccion) {
 
   let partes = d.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
 
-  // ⭐ DEDUPE: eliminar partes duplicadas (aunque estén separadas)
   let partesUnicas = [];
-  let vistos = {};
   for (let i = 0; i < partes.length; i++) {
     const key = partes[i].toLowerCase().replace(/[^a-z0-9áéíóúñ]/g, '').trim();
     if (!key || key.length < 2) continue;
-    // Solo dedupe si aparece en las últimas 3 partes (evita deduplicar "I" de "Misiones I")
     let esDuplicadoReciente = false;
     for (let j = Math.max(0, partesUnicas.length - 3); j < partesUnicas.length; j++) {
       const prevKey = partesUnicas[j].toLowerCase().replace(/[^a-z0-9áéíóúñ]/g, '').trim();
@@ -236,7 +223,6 @@ function formatearParaGoogle(direccion) {
 
   if (partes.length === 0) return direccion.trim();
 
-  // Encontrar número de casa
   let idxNum = -1;
   for (let i = 1; i < partes.length; i++) {
     if (/^\d+[A-Za-z]?$/.test(partes[i])) { idxNum = i; break; }
@@ -260,7 +246,6 @@ function formatearParaGoogle(direccion) {
 
     let resto = partes.slice(idxNum + 1);
 
-    // ⭐ Deduplicar dentro del resto también
     let restoLimpio = [];
     for (let i = 0; i < resto.length; i++) {
       const r = resto[i].toLowerCase().trim();
@@ -286,7 +271,7 @@ function formatearParaGoogle(direccion) {
   return resultado.join(', ');
 }
 
-// ---------- Formatear dirección en HTML (con negritas) ----------
+// ---------- Formatear dirección en HTML ----------
 function formatearDireccionHTML(direccion) {
   if (!direccion) return '';
   const partes = direccion.split(',').map(function(s) { return s.trim(); });
@@ -336,7 +321,6 @@ function renderPackages() {
   });
   packagesList.innerHTML = html;
 
-  // Click en el código de orden → editar
   document.querySelectorAll('.pkg-order').forEach(function(el) {
     el.addEventListener('click', function(e) {
       e.stopPropagation();
@@ -353,7 +337,6 @@ function renderPackages() {
     });
   });
 
-  // Click en la dirección → vista previa del mapa
   document.querySelectorAll('.pkg-address').forEach(function(el) {
     el.addEventListener('click', function(e) {
       const idx = parseInt(e.target.dataset.idx);
@@ -410,7 +393,6 @@ function moverPaquete(fromIdx, toIdx) {
 //  ESCÁNER DE CÓDIGO DE BARRAS / QR
 // ============================================
 function abrirScanner() {
-  // Verificación de la librería
   if (typeof Html5Qrcode === 'undefined') {
     throw new Error('La librería del escáner no está cargada');
   }
@@ -453,14 +435,12 @@ function abrirScanner() {
           });
         },
         function(errorMessage) {
-          // Ignorar errores de "no encontrado"
+          // ignorar
         }
       ).catch(function(err) {
         console.error('Error al iniciar escáner:', err);
         alert('No se pudo iniciar la cámara del escáner.\n\n' + (err.message || err));
-        cerrarScanner(function() {
-          cameraInput.click();
-        });
+        cerrarScanner(function() { cameraInput.click(); });
       });
     } catch (err) {
       console.error('Excepción en abrirScanner:', err);
@@ -470,6 +450,55 @@ function abrirScanner() {
     }
   }, 200);
 }
+
+function cerrarScanner(callback) {
+  if (scannerInstance) {
+    scannerInstance.stop().then(function() {
+      scannerInstance.clear().catch(function() {});
+      scannerInstance = null;
+      scanModal.hidden = true;
+      if (callback) callback();
+    }).catch(function() {
+      scannerInstance = null;
+      scanModal.hidden = true;
+      if (callback) callback();
+    });
+  } else {
+    scanModal.hidden = true;
+    if (callback) callback();
+  }
+}
+
+btnSkipScan.addEventListener('click', function() {
+  currentOrderNumber = '';
+  cerrarScanner(function() {
+    cameraInput.click();
+  });
+});
+
+// ---------- Vista previa ----------
+async function abrirVistaPrevia(idx) {
+  const p = packages[idx];
+  if (!p) return;
+  previewPackageIndex = idx;
+  previewTitle.textContent = p.recipient ? p.recipient : ('Paquete ' + (idx + 1));
+  previewAddress.textContent = p.address;
+  previewModal.hidden = false;
+
+  if (!p.coords) {
+    showLoader('Ubicando dirección…');
+    try {
+      const resultado = await geocodificarDireccion(p.address);
+      p.coords = { lat: resultado.lat, lon: resultado.lon };
+      savePackages();
+      hideLoader();
+    } catch (err) {
+      hideLoader();
+      previewModal.hidden = true;
+      alert('No se pudo ubicar esta dirección.\n\n' + (err.message || ''));
+      return;
+    }
+  }
 
   setTimeout(function() {
     if (previewMapInstance) { previewMapInstance.remove(); previewMapInstance = null; }
@@ -498,19 +527,15 @@ btnPreviewMaps.addEventListener('click', function() {
 });
 
 // ---------- Captura ----------
-// ---------- Captura ----------
 btnCapture.addEventListener('click', function() {
   if (!getApiKey()) { alert('Primero configura tu API key de OCR.space en Ajustes ⚙️'); return; }
 
-  // ⚠️ Verificar que la librería del escáner cargó
   if (typeof Html5Qrcode === 'undefined') {
     console.warn('Html5Qrcode no está disponible. Se salta el escáner.');
-    // Ir directo a la cámara
     cameraInput.click();
     return;
   }
 
-  // Intentar abrir el escáner
   try {
     abrirScanner();
   } catch (err) {
@@ -518,6 +543,26 @@ btnCapture.addEventListener('click', function() {
     alert('No se pudo iniciar el escáner.\nSe abrirá la cámara directamente.\n\n' + err.message);
     cameraInput.click();
   }
+});
+
+cameraInput.addEventListener('change', function(e) {
+  if (!e.target.files || e.target.files.length === 0) return;
+  const file = e.target.files[0];
+  const reader = new FileReader();
+  reader.onload = function(ev) {
+    cropImage.src = ev.target.result;
+    cropModal.hidden = false;
+    rotacionActual = 0;
+    if (cropperInstance) { cropperInstance.destroy(); cropperInstance = null; }
+    setTimeout(function() {
+      cropperInstance = new Cropper(cropImage, {
+        viewMode: 1, aspectRatio: 1.8, autoCropArea: 0.9,
+        movable: true, zoomable: true, rotatable: true,
+        scalable: false, background: false, responsive: true
+      });
+    }, 100);
+  };
+  reader.readAsDataURL(file);
 });
 
 btnRotate.addEventListener('click', function() {
@@ -619,13 +664,11 @@ function detectarNombre(texto) {
   const lineas = texto.split('\n').map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 0; });
   if (lineas.length === 0) return '';
 
-  // ESTRATEGIA 1: "DESTINATARIO: Nombre" en la misma línea
   for (let i = 0; i < lineas.length; i++) {
     const m = lineas[i].match(/destinatario\s*[:\-]?\s*(.+)/i);
     if (m && m[1].trim().length > 2) {
       return limpiarNombre(m[1].trim());
     }
-    // ESTRATEGIA 2: "DESTINATARIO:" solo en la línea, nombre en la SIGUIENTE
     if (/^destinatario\s*[:\-]?\s*$/i.test(lineas[i])) {
       if (lineas[i + 1] && lineas[i + 1].length > 2) {
         return limpiarNombre(lineas[i + 1]);
@@ -633,7 +676,6 @@ function detectarNombre(texto) {
     }
   }
 
-  // ESTRATEGIA 3: "NOMBRE:" en cualquier parte
   for (let i = 0; i < lineas.length; i++) {
     const m = lineas[i].match(/nombre\s*[:\-]?\s*(.+)/i);
     if (m && m[1].trim().length > 2) {
@@ -644,7 +686,6 @@ function detectarNombre(texto) {
   return '';
 }
 
-// Limpiar nombre: quitar caracteres raros
 function limpiarNombre(s) {
   return s
     .replace(/^[\s:\-]+/, '')
@@ -652,6 +693,7 @@ function limpiarNombre(s) {
     .replace(/\s{2,}/g, ' ')
     .trim();
 }
+
 // ---------- Ajustes ----------
 btnSettings.addEventListener('click', function() { inputApiKey.value = getApiKey(); settingsModal.hidden = false; });
 btnCancelSettings.addEventListener('click', function() { settingsModal.hidden = true; });
@@ -977,4 +1019,4 @@ function distancia(a, b) {
 }
 
 document.addEventListener('DOMContentLoaded', function() { renderPackages(); });
-console.log('app v32 cargado');
+console.log('app v35 cargado');
